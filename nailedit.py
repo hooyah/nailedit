@@ -57,7 +57,7 @@ class Viewer(QtGui.QMainWindow):
 
 
         self.targetImage = self.parameters["TargetImage"]
-        self.np_targetArray = numpy.array(self.targetImage).astype("float32")/255
+        self.np_targetArray = numpy.array(self.targetImage).astype("float32")/255.0
         self.parameters["CurrentImage"] = Image.new("RGB", self.targetImage.size, parameters["backgroundColor"])
         self.residual = image_diff(self.parameters["CurrentImage"], self.np_targetArray)
 
@@ -155,21 +155,25 @@ class Viewer(QtGui.QMainWindow):
         #        length = pnts.p[current_point_idx].dist(pnts.p[neighbour])
         #        candidates.append((quality, neighbour, cur_diff, length))
         col = parameters["threadColor"]
+        # clamp current_image with target to acurately detect overshoot
+
+        cur_np = numpy.array(currentImage.getchannel("R"))
+        max_v = self.np_targetArray.max()*255
+        #cur_np = numpy.minimum(cur_np, (self.np_targetArray*255).astype("uint8"), out=cur_np)
+        cur_np = numpy.clip(cur_np, 0, max_v, out=cur_np)
+        currentImage = Image.merge("RGB", (Image.fromarray(cur_np), Image.fromarray(cur_np), Image.fromarray(cur_np)))
+
         params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual) for neighbour in neighbours_idx if neighbour != last_point_idx]
         candidates = self.threadpool.map(check_quality, params)
 
 
         # fish out the best match
+        candidates = [c for c in candidates if c[0] != 0]   # c[0] == 0 indicates color clipping due to
         candidates.sort()
         #candidates.sort(reverse=True)
-        # pick the first candidate that is negative if availably
-        #for c in candidates:
-        #    bestMatch = c[1]
-        #    if c[0] < 0.0:
-        #        break
         bestMatch = candidates[0]
 
-        improvement = self.residual - candidates[0][2]
+        improvement = bestMatch[0]#self.residual - candidates[0][2]
         self.residual = candidates[0][2]
         self.avg_improvement = self.avg_improvement*.9 + improvement * .1
         self.string_length += candidates[0][3] * self.parameters["ppi"]
@@ -231,11 +235,13 @@ def check_quality(params):
     col = params[5]
     prevResidual = params[6]
 
+    length = p1.dist(p2)
+    b_len = max(int(abs(p1.x-p2.x)), int(abs(p1.y-p2.y))) # bresenham num pixels
+
     new_img = draw_thread(img.copy(), pnt1=p1, pnt2=p2, color=col)
     cur_diff = image_diff(new_img, trg)    # what is the difference to the target
-    quality = (cur_diff - prevResidual)    # how much better did this line make the result
-    quality += quality * 3 * (1.0-p2.heat) # attenuate by previously visited
-    length = p1.dist(p2)
+    quality = (cur_diff - prevResidual)/b_len    # how much better did this line make the result
+    quality += abs(quality) * 10 * p2.heat # attenuate by previously visited
     return (quality, ind, cur_diff, length)
 
 
@@ -289,7 +295,8 @@ def image_diff(image, targetArray):
     #worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 2, out=error)
 
     #error = numpy.add(better, worse, out=error)
-    error = numpy.multiply(error, error, out=error)
+    #error = numpy.multiply(error, error, out=error)
+    error = numpy.abs(error, out=error)
 
     #error = (better+worse)**2 # error squred
     return numpy.sum(error)
@@ -315,7 +322,7 @@ if __name__ == '__main__':
         "grid_resX":25,
         "grid_resY":25,
         "backgroundColor":(0,0,0),
-        "threadColor":(255, 255, 255, 40),
+        "threadColor":(255, 255, 255, 30),
         "currentPoint" : 0,
         "lastPoint": -1
     }
@@ -360,7 +367,7 @@ t12: 5 times higher penalty for error
 t13: 2 times higher penalty 16k stuck
 t14: twice the opacity, removed penalty
 t15: point scatter affected by DetailImage (gradient magnidute)
-t16: increased Detail pull a bit, added heat
+t16: increased Detail pull a bit, added heat, complete overhaul
 
 ideas: scipy draw line directly into numpy array, skip pillow conversions
         do error calculation of blurred picture (preliminary tests have shown no improvements, 10x slower)

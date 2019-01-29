@@ -115,7 +115,7 @@ class PointCloud():
         targetLength /= numEdges
         print "targetLen", targetLength
 
-        targetLength *= 1.1 # make it squeeze into the corners
+        targetLength *= 1.2 # make it squeeze into the corners
         ease = 0.25 # only move it this much of the desired distance
         edgedone = set()
         for t in tri.simplices:
@@ -133,10 +133,12 @@ class PointCloud():
                         det = remap(det, 0, 255, 1.0, 0.6)
                         f *= det
 
-                    self.p[i] = (self.p[i] - mp) * f + mp
-                    self.p[j] = (self.p[j] - mp) * f + mp
-                    self.p[i] = self.p[i].clamped(0.0, self.width, 0.0, self.height)
-                    self.p[j] = self.p[j].clamped(0.0, self.width, 0.0, self.height)
+                    if i not in mask:
+                        self.p[i] = (self.p[i] - mp) * f + mp
+                        self.p[i] = self.p[i].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
+                    if j not in mask:
+                        self.p[j] = (self.p[j] - mp) * f + mp
+                        self.p[j] = self.p[j].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
                     edgedone.add(pair)
 
         #print len(self.p), len(tri.points), np.max(tri.simplices)
