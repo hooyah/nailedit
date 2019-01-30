@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial import Delaunay, ConvexHull
 from PIL import ImageDraw
 
-class Point2():
+class Point2(object):
 
     def __init__(self, x=0.0, y=0.0, heat=0.0):
         self.x = x
@@ -34,7 +34,7 @@ def remap(val, from_min, from_max, to_min, to_max):
     return (((val - from_min) * (to_max - to_min)) / (from_max - from_min)) + to_min
 
 
-class PointCloud():
+class PointCloud(object):
 
     def __init__(self, dimx, dimy):
         self.p = []
@@ -48,34 +48,60 @@ class PointCloud():
         #return [Point2(float(x)/(w-1)+random.uniform(-.5,.5)*(1.0/(w-1)),float(y)/(h-1)+random.uniform(-.5,.5)*(1.0/(h-1))) for x in xrange(w) for y in xrange(h)]
 
         # offset
-        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for x in xrange(w) for y in xrange(h)]
-        self.p += [Point2(p.x*self.width, p.y*self.height) for p in pt if p.x <= 1.0]
+        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for x in xrange(int(w)) for y in xrange(int(h))]
+        self.p += [Point2(p.x*(self.width-0.01), p.y*(self.height-0.01)) for p in pt if p.x <= 1.0]
 
     def addRandom(self, num):
 
         random.seed(1234)
-        self.p += [Point2(random.uniform(0, self.width), random.uniform(0,self.height)) for n in xrange(num)]
+        self.p += [Point2(random.uniform(0, float(self.width)-0.01), random.uniform(0,float(self.height)-0.01)) for n in xrange(num)]
+
 
     def cool(self, f=0.1):
 
         for pnt in self.p:
             pnt.heat = pnt.heat * (1.0-f)
 
+    def heat(self, temp):
 
-    def relax(self, image=None, iterations=50, detail_img=None):
+        for pnt in self.p:
+            pnt.heat = temp
+
+
+    def scatterOnMask(self, maskImg, numPoints, minDist, threshold = 0.2):
+
+        print 'scattering',numPoints,'points'
+        random.seed(4826)
+        num = 0
+        fail = 0
+        while num < numPoints and fail < numPoints*10:
+            pt = Point2(random.uniform(1, self.width-1.01), random.uniform(1,self.height-1.01))
+            msk = maskImg.getpixel((pt.x, pt.y))/255.0
+            if msk >= threshold :
+                if len(self.p) and self.p[self.closestPoint(pt.x, pt.y)].dist(pt) < minDist:
+                    fail += 1
+                    continue
+                num += 1
+                self.p.append(pt)
+
+        print "successfully scattered", num, "of", numPoints, "points"
+
+
+
+    def relax(self, image, iterations, detail_img, minDist, maxDist):
 
         npp = np.array([[pnt.x,pnt.y] for pnt in self.p])
         tri = Delaunay(npp)
 
         # mask the autside border
-        mask = set()
         for t_ind, ns in enumerate(tri.neighbors):
             for n_ind, n in enumerate(ns):
                 if n == -1:
                     for i in [0,1,2]:
                         if i != n_ind:
-                            mask.add(tri.simplices[t_ind][i])
+                            self.p[tri.simplices[t_ind][i]].heat = 1.0
 
+        # draw mesh
         if image:
             drawn = set()
             draw = ImageDraw.Draw(image)
@@ -113,9 +139,8 @@ class PointCloud():
                     targetLength += self.p[i].dist(self.p[j])
                     numEdges += 1
         targetLength /= numEdges
-        print "targetLen", targetLength
+        print "targetLen", targetLength, "min", minDist, "max", maxDist
 
-        targetLength *= 1.2 # make it squeeze into the corners
         ease = 0.25 # only move it this much of the desired distance
         edgedone = set()
         for t in tri.simplices:
@@ -130,19 +155,26 @@ class PointCloud():
                     # scale lenght by detail image
                     if detail_img:
                         det = detail_img.getpixel((mp.x, mp.y))
-                        det = remap(det, 0, 255, 1.0, 0.6)
-                        f *= det
+                        det = remap(det, 0, 255, maxDist/l, minDist/l)
+                        f *= 1.0 - det / iterations
 
-                    if i not in mask:
+                    if self.p[i].heat <= 0.0:
                         self.p[i] = (self.p[i] - mp) * f + mp
                         self.p[i] = self.p[i].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
-                    if j not in mask:
+                    if self.p[j].heat <= 0.0:
                         self.p[j] = (self.p[j] - mp) * f + mp
                         self.p[j] = self.p[j].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
                     edgedone.add(pair)
 
         #print len(self.p), len(tri.points), np.max(tri.simplices)
 
+
+    def closestPoint(self, x, y):
+
+        to = Point2(x, y)
+        dst = [[pnt.dist(to), i] for i,pnt in enumerate(self.p)]
+        dst.sort()
+        return dst[0][1]
 
 
     def findNeighbours(self, pnt, max_radius):

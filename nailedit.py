@@ -8,6 +8,15 @@ import numpy
 from scipy import ndimage
 from multiprocessing import Pool as ThreadPool
 import time
+import json, numbers
+
+
+def is_jsonable(x):
+    try:
+        json.dumps(x)
+        return True
+    except (TypeError, OverflowError):
+        return False
 
 
 class Viewer(QtGui.QMainWindow):
@@ -24,12 +33,16 @@ class Viewer(QtGui.QMainWindow):
         self.imageLabel.setSizePolicy(QtGui.QSizePolicy.Ignored,
                 QtGui.QSizePolicy.Ignored)
         self.imageLabel.setScaledContents(False)
+        self.imageLabel.setStyleSheet("border: 0px")
+        self.imageLabel.setContentsMargins(0, 0, 0, 0)
 
         self.imageLabel2 = QtGui.QLabel()
         self.imageLabel2.setBackgroundRole(QtGui.QPalette.Base)
-        self.imageLabel2.setSizePolicy(QtGui.QSizePolicy.Ignored,
-                QtGui.QSizePolicy.Ignored)
+        #self.imageLabel2.setSizePolicy(QtGui.QSizePolicy.Ignored,
+        #        QtGui.QSizePolicy.Ignored)
         self.imageLabel2.setScaledContents(False)
+        self.imageLabel.setStyleSheet("border: 0px")
+        self.imageLabel2.setContentsMargins(0, 0, 0, 0)
 
         self.bl = QtGui.QVBoxLayout(self.multiWidget)
         self.bl.addWidget(self.imageLabel)
@@ -43,12 +56,13 @@ class Viewer(QtGui.QMainWindow):
         self.scrollArea.setLayout(self.bl)
 
 
-        self.setWindowTitle("NailedIt")
-        self.resize(parameters["proc_width"]+5, parameters["proc_height"]*2+10)
+        self.mode ="ProcessImage"
+        self.setWindowTitle("NailedIt - "+self.mode)
+        self.resize(parameters["proc_width"]+50, parameters["proc_height"]*2+50)
 
-        self.mode ="points"
         self.avg_improvement = (255**2)*2*parameters["proc_width"]
 
+        self.string_path = []
         self.string_length = 0
         self.iterationCounter = 0
         self.imgCounter = 0
@@ -71,6 +85,36 @@ class Viewer(QtGui.QMainWindow):
         self.timer.start(0)
 
 
+    def save_as(self, filename):
+
+        imagename = filename.replace(".json", ".png")
+        data = { "1:summary": {
+                    "number of nails" : len(self.parameters["PointCloud"].p),
+                    "thread length" : self.string_length,
+                    "result image" : imagename,
+                    "num_segments" : self.iterationCounter
+                 },
+                 "2:parameters:" : dict(kv for kv in self.parameters.iteritems() if is_jsonable(kv[1])),
+                 "3:nails" : [ (p.x,p.y) for p in self.parameters["PointCloud"].p ],
+                 "4:thread": self.string_path
+               }
+        with open(filename, "w") as f:
+            json.dump(data, f, indent=4, sort_keys=True)
+            f.close()
+            self.parameters["CurrentImage"].save(imagename)
+            print "done writing", filename
+
+
+
+    def closeEvent(self, event):
+
+        self.timer.stop()
+        if self.mode == "Threading" and QtGui.QMessageBox.question(self, "Quit", "Save it?", QtGui.QMessageBox.Yes, QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
+            filename = QtGui.QFileDialog.getSaveFileName(self, "Save as", "./", "Nailedit (*.json)")
+            if filename:
+                self.save_as(filename[0])
+
+
     def showImage(self, pil_image, slot=0):
 
         if slot == 0:
@@ -85,9 +129,10 @@ class Viewer(QtGui.QMainWindow):
 
     def workImage(self):
 
-        if not "DetailImage" in parameters:
+        targetImage = self.parameters["TargetImage"]
+        if not "DetailImage" in self.parameters:
 
-            targetImage = self.parameters["TargetImage"]
+            self.setWindowTitle("NailedIt - Detail Image")
             img = targetImage#.filter(ImageFilter.GaussianBlur(2))
             np_img = numpy.array(img).astype("float32")
             #gradx, grady = numpy.gradient(np_img)
@@ -100,31 +145,78 @@ class Viewer(QtGui.QMainWindow):
 
             self.showImage(targetImage)
             self.showImage(Image.merge("RGB", (img,img,img)), slot=1)
-            self.timer.start(3000)
+            self.timer.start(2000)
+
+        elif not "EdgesImage" in self.parameters:
+
+            self.setWindowTitle("NailedIt - Edges Image")
+            img = targetImage#.filter(ImageFilter.GaussianBlur(2))
+            np_img = numpy.array(img).astype("float32")
+            gradmag = ndimage.gaussian_gradient_magnitude(np_img, 1)
+            gradmag = gradmag / gradmag.max() * 255
+            img = Image.fromarray(gradmag.astype("uint8"))
+            img = self.parameters["EdgesImage"] = img
+
+            self.showImage(Image.merge("RGB", (img,img,img)), slot=1)
+            self.timer.start(4000)
+
 
         else:
             self.disconnect(self.timer, QtCore.SIGNAL("timeout()"), self.workImage)
             self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.workPoints)
             self.timer.start(10)
+            self.mode ="ProcessPoints"
+            self.setWindowTitle("NailedIt - "+self.mode)
 
     def workPoints(self):
 
         targetImage = self.parameters["TargetImage"]
         currentImage = self.parameters["CurrentImage"]
-        currentImage.paste(parameters["backgroundColor"], (0,0)+currentImage.size)
-        pnts = parameters["PointCloud"]
+        currentImage.paste(self.parameters["backgroundColor"], (0,0)+currentImage.size)
 
-        pnts.relax(currentImage, 50, self.parameters["DetailImage"])
+        minDist = self.parameters["nailDistMin"]
+        maxDist = self.parameters["nailDistMax"]
+        img_w = self.parameters["proc_width"]
+        img_h = self.parameters["proc_height"]
+
+        if "PointCloud" in self.parameters:
+            pnts = self.parameters["PointCloud"]
+        else:
+            pc = PointCloud(img_w, img_h)
+            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), int(minDist), threshold=0.2)
+            pc.heat(1.0)
+
+            img = self.parameters["EdgesImage"]
+            img = draw_points(Image.merge("RGB", (img,img,img)), pc, 3)
+            self.showImage(img, slot=1)
+
+            gridDistX = img_w / maxDist
+            gridDistY = img_h / maxDist
+            pc.addGrid(gridDistX, gridDistY)
+            pc.addRandom(int(gridDistX * gridDistY * 0.3))
+            self.parameters["PointCloud"] = pc
+
+            self.timer.start(1000)
+            return
+
+
+
+        pnts.relax(currentImage, 50, self.parameters["DetailImage"], minDist, maxDist)
         draw_points(currentImage, pnts)
 
         self.showImage(currentImage)
         self.iterationCounter += 1
         if self.iterationCounter == 50:
+            start = self.parameters["start_at"]
+            self.parameters["currentPoint"] = pnts.closestPoint(float(start[0])*img_w, float(start[1]*img_h))
+            self.string_path.append(self.parameters["currentPoint"])
+
             self.disconnect(self.timer, QtCore.SIGNAL("timeout()"), self.workPoints)
             self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.March)
             self.iterationCounter = 0
-            currentImage.paste(parameters["backgroundColor"], (0, 0) + currentImage.size)
-            print self.parameters.keys()
+            currentImage.paste(self.parameters["backgroundColor"], (0, 0) + currentImage.size)
+            self.mode = "Threading"
+            self.setWindowTitle("NailedIt - " + self.mode)
         self.timer.start(10)
 
 
@@ -132,31 +224,22 @@ class Viewer(QtGui.QMainWindow):
     def March(self):
 
 
-        beauty_image = self.parameters["BeautyImage"] if "BeautyImage" in self.parameters else Image.new("RGB", self.targetImage.size, parameters["backgroundColor"])
+        beauty_image = self.parameters["BeautyImage"] if "BeautyImage" in self.parameters else Image.new("RGB", self.targetImage.size, self.parameters["backgroundColor"])
         currentImage = self.parameters["CurrentImage"]
 
-        pnts = parameters["PointCloud"]
-        current_point_idx = parameters["currentPoint"]
-        last_point_idx = parameters["lastPoint"]
+        pnts = self.parameters["PointCloud"]
+        current_point_idx = self.parameters["currentPoint"]
+        last_point_idx = self.parameters["lastPoint"]
 
         # find next best point
 
         # get most reasonable neightbors
-        neighbours_idx = pnts.findNeighbours(current_point_idx, parameters["proc_width"]*0.25)
+        neighbours_idx = pnts.findNeighbours(current_point_idx, self.parameters["proc_width"]*0.25)
 
         # check how good the neighbours are
-        #candidates = []
-        #base_diff = self.residual #image_diff(currentImage, np_targetArray)
-        #for neighbour in neighbours_idx:
-        #    if neighbour != last_point_idx:
-        #        new_img = draw_thread(currentImage.copy(), pnt1=pnts.p[current_point_idx], pnt2=pnts.p[neighbour], color=parameters["threadColor"])
-        #        cur_diff = image_diff(new_img, self.np_targetArray)      # what is the difference to the target
-        #        quality = cur_diff - base_diff                      # how much better did this line make the result
-        #        length = pnts.p[current_point_idx].dist(pnts.p[neighbour])
-        #        candidates.append((quality, neighbour, cur_diff, length))
-        col = parameters["threadColor"]
-        # clamp current_image with target to acurately detect overshoot
+        col = self.parameters["threadColor"]
 
+        # clamp current_image with target to acurately detect overshoot
         cur_np = numpy.array(currentImage.getchannel("R"))
         max_v = self.np_targetArray.max()*255
         #cur_np = numpy.minimum(cur_np, (self.np_targetArray*255).astype("uint8"), out=cur_np)
@@ -174,13 +257,14 @@ class Viewer(QtGui.QMainWindow):
         bestMatch = candidates[0]
 
         improvement = bestMatch[0]#self.residual - candidates[0][2]
-        self.residual = candidates[0][2]
+        self.residual = bestMatch[2]
         self.avg_improvement = self.avg_improvement*.9 + improvement * .1
-        self.string_length += candidates[0][3] * self.parameters["ppi"]
-        print "iteration", self.iterationCounter, "residual", candidates[0][2], "improvement", improvement, "avg", self.avg_improvement, "string {:.1f}m".format(self.string_length)
-        print candidates[:5]
+        self.string_length += bestMatch[3] * self.parameters["ppi"]
+        self.string_path.append(bestMatch[1])
+        print "iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement, "string {:.1f}m".format(self.string_length)
+        #print candidates[:5]
 
-        img = draw_thread(currentImage.copy(), pnts.p[current_point_idx], pnts.p[bestMatch[1]], parameters["threadColor"])
+        img = draw_thread(currentImage.copy(), pnts.p[current_point_idx], pnts.p[bestMatch[1]], self.parameters["threadColor"])
         self.parameters["CurrentImage"] = img
         self.parameters["lastPoint"] = current_point_idx
         self.parameters["currentPoint"] = bestMatch[1]
@@ -251,25 +335,31 @@ def Enhance(image, width, height):
     enh = ImageEnhance.Contrast(img)
     img = enh.enhance(1.25)
     bt  = ImageEnhance.Brightness(img)
-    img = bt.enhance(0.95)
+    img = bt.enhance(0.80)
 
     return img.convert("L")
 
 
-def Scatter(resX, resY, dimx, dimy):
+"""def Scatter(resX, resY, dimx, dimy):
 
     pc = PointCloud(dimx, dimy)
     pc.addGrid(resX, resY)
     pc.addRandom(int(resX * resY * 0.3))
 
-    return pc
+    return pc"""
 
-def draw_points(image, pnts):
+def draw_points(image, pnts, size=1):
 
+    w = int(size-1)/2
     draw = ImageDraw.Draw(image, mode="RGBA")
-    for p in pnts.p:
-        #draw.rectangle([p.x*w-2, p.y*h-2, p.x*w+2, p.y*h+2], fill=(255,255,255,127), outline=(255,255,255,255))
-        draw.point((p.x, p.y), (255,int(255*(1.0-p.heat)),0,255))
+    if w < 1 :
+        for p in pnts.p:
+            draw.point((p.x, p.y), (255,int(255*(1.0-p.heat)),0,255))
+    else:
+        for p in pnts.p:
+            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=(255,int(255*(1.0-p.heat)),0,127), outline=(255,255,255,255))
+
+    return image
 
 
 def draw_thread(image, pnt1, pnt2, color):
@@ -291,12 +381,11 @@ def image_diff(image, targetArray):
     error = numpy.subtract(np_image, targetArray, out=np_image)
 
     #nul = numpy.zeros(error.shape)
-    #better = numpy.clip(error, -2000000000, 0)
-    #worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 2, out=error)
-
-    #error = numpy.add(better, worse, out=error)
-    #error = numpy.multiply(error, error, out=error)
-    error = numpy.abs(error, out=error)
+    better = numpy.clip(error, -2000000000, 0)
+    worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 5, out=error)
+    error = numpy.add(better, worse, out=error)
+    error = numpy.multiply(error, error, out=error)
+    #error = numpy.abs(error, out=error)
 
     #error = (better+worse)**2 # error squred
     return numpy.sum(error)
@@ -315,36 +404,41 @@ if __name__ == '__main__':
 
     app = QtGui.QApplication(sys.argv)
 
-    parameters = {
+    ppm = 0.3/500 # pixels per meter
+    params = {
         "proc_width":500,
         "proc_height":500,
-        "ppi": 0.3/500, # pixels per meter
-        "grid_resX":25,
-        "grid_resY":25,
+        "ppi": ppm,
+        #"grid_resX":25,
+        #"grid_resY":25,
+        "nailDistMin": 6.0 / 1000.0 / ppm,
+        "nailDistMax": 16.0 / 1000.0 / ppm,
         "backgroundColor":(0,0,0),
-        "threadColor":(255, 255, 255, 30),
+        "threadColor":(255, 255, 255, 20),
         "currentPoint" : 0,
-        "lastPoint": -1
+        "lastPoint": -1,
+        "start_at": (0.5,0)
     }
 
 
 
     # 1 load image
-    img = Image.open("einstein.jpeg")
+    params["inputImagePath"] = "einstein.jpeg"
+    img = Image.open(params["inputImagePath"])
 
     # 1.1 enhance/conform image
-    img = Enhance(img, parameters["proc_width"], parameters["proc_height"])
+    img = Enhance(img, params["proc_width"], params["proc_height"])
 
     # 1.2 analyse image
     #   1.3 find edges amd corners
 
     # 2 scatter points
-    parameters["PointCloud"] = Scatter(parameters["grid_resX"], parameters["grid_resY"], parameters["proc_width"]-1, parameters["proc_height"]-1)
+    #parameters["PointCloud"] = Scatter(parameters["grid_resX"], parameters["grid_resY"], parameters["proc_width"]-1, parameters["proc_height"]-1)
 
-    parameters["TargetImage"] = img
+    params["TargetImage"] = img
 
 
-    imageViewer = Viewer(parameters)
+    imageViewer = Viewer(params)
     imageViewer.show()
     sys.exit(app.exec_())
 
@@ -368,6 +462,9 @@ t13: 2 times higher penalty 16k stuck
 t14: twice the opacity, removed penalty
 t15: point scatter affected by DetailImage (gradient magnidute)
 t16: increased Detail pull a bit, added heat, complete overhaul
+t17: points on edges
+t18: retry penalty, smaller min dist, white point lowered
+t19: least squared, more edge points, less opacity thread, darker target
 
 ideas: scipy draw line directly into numpy array, skip pillow conversions
         do error calculation of blurred picture (preliminary tests have shown no improvements, 10x slower)
