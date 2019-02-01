@@ -196,6 +196,8 @@ class Viewer(QtGui.QMainWindow):
             pc.addRandom(int(gridDistX * gridDistY * 0.3))
             self.parameters["PointCloud"] = pc
 
+            pc.maskPoints(targetImage, 0.05)
+
             self.timer.start(1000)
             return
 
@@ -210,6 +212,7 @@ class Viewer(QtGui.QMainWindow):
             start = self.parameters["start_at"]
             self.parameters["currentPoint"] = pnts.closestPoint(float(start[0])*img_w, float(start[1]*img_h))
             self.string_path.append(self.parameters["currentPoint"])
+            pnts.heat(0)
 
             self.disconnect(self.timer, QtCore.SIGNAL("timeout()"), self.workPoints)
             self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.March)
@@ -244,37 +247,48 @@ class Viewer(QtGui.QMainWindow):
         max_v = self.np_targetArray.max()*255
         #cur_np = numpy.minimum(cur_np, (self.np_targetArray*255).astype("uint8"), out=cur_np)
         cur_np = numpy.clip(cur_np, 0, max_v, out=cur_np)
-        currentImage = Image.merge("RGB", (Image.fromarray(cur_np), Image.fromarray(cur_np), Image.fromarray(cur_np)))
+        lum = Image.fromarray(cur_np)
+        currentImage = Image.merge("RGB", (lum, lum, lum))
 
         params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual) for neighbour in neighbours_idx if neighbour != last_point_idx]
         candidates = self.threadpool.map(check_quality, params)
 
 
         # fish out the best match
-        candidates = [c for c in candidates if c[0] != 0]   # c[0] == 0 indicates color clipping due to
+        #candidates = [c for c in candidates if c[0] != 0]   # c[0] == 0 indicates color clipping due to
         candidates.sort()
         #candidates.sort(reverse=True)
         bestMatch = candidates[0]
 
         improvement = bestMatch[0]#self.residual - candidates[0][2]
-        self.residual = bestMatch[2]
+        self.residual = bestMatch[2] # (has to be recalculated if changing target data below)
         self.avg_improvement = self.avg_improvement*.9 + improvement * .1
         self.string_length += bestMatch[3] * self.parameters["ppi"]
         self.string_path.append(bestMatch[1])
-        print "iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement, "string {:.1f}m".format(self.string_length)
-        #print candidates[:5]
 
-        img = draw_thread(currentImage.copy(), pnts.p[current_point_idx], pnts.p[bestMatch[1]], self.parameters["threadColor"])
-        self.parameters["CurrentImage"] = img
+
+        currentImage = draw_thread(currentImage.copy(), pnts.p[current_point_idx], pnts.p[bestMatch[1]], self.parameters["threadColor"])
+        self.parameters["CurrentImage"] = currentImage
         self.parameters["lastPoint"] = current_point_idx
         self.parameters["currentPoint"] = bestMatch[1]
 
         pnts.cool(0.1)
         pnts.p[bestMatch[1]].heat = 1.0
 
+        # remove areas that are currentImage>=target from the target
+        #cur_np = numpy.array(currentImage.getchannel("R"), dtype="float32")
+        #cur_np = numpy.multiply(cur_np, 1.0/255.0, out=cur_np)
+        #rem = (cur_np < self.np_targetArray).astype(float)
+        #numpy.multiply(self.np_targetArray, rem, out=self.np_targetArray)
+        #self.residual = image_diff(currentImage, self.np_targetArray, cur_np)
+
+        print "iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement, "string {:.1f}m".format(self.string_length)
+        #print candidates[:5]
+
+
         # pretty render
         beauty_image = draw_thread(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (255,120,120,255))
-        beauty_image = Image.blend(beauty_image, img, 0.1)
+        beauty_image = Image.blend(beauty_image, currentImage, 0.1)
         draw_points(beauty_image, pnts)
         self.parameters["BeautyImage"] = beauty_image
         self.showImage(beauty_image)
@@ -289,7 +303,7 @@ class Viewer(QtGui.QMainWindow):
             greenlut = tuple(0 if i <= 127 else ((i-127)*2) for i in xrange(256))
             bluelut  = tuple([0]*256)
 
-            difImage = ImageChops.subtract(self.targetImage, img.convert("L"), 2, 127)
+            difImage = ImageChops.subtract(self.targetImage, currentImage.getchannel("R"), 2, 127)
             difImage = Image.merge("RGB", (difImage, difImage, difImage))
             difImage = difImage.point((redlut + greenlut + bluelut))
             self.showImage(difImage, slot=1)
@@ -302,7 +316,7 @@ class Viewer(QtGui.QMainWindow):
 
         if abs(self.avg_improvement) <= 0.0001:
             print "no more improvement"
-            self.timer.start(1000)
+            self.timer.start(10)
         else:
             self.timer.start(10)
 
@@ -320,11 +334,12 @@ def check_quality(params):
     prevResidual = params[6]
 
     length = p1.dist(p2)
-    b_len = max(int(abs(p1.x-p2.x)), int(abs(p1.y-p2.y))) # bresenham num pixels
+    b_len = max(int(abs(p1.x-p2.x)+1), int(abs(p1.y-p2.y))+1) # bresenham num pixels
 
     new_img = draw_thread(img.copy(), pnt1=p1, pnt2=p2, color=col)
     cur_diff = image_diff(new_img, trg)    # what is the difference to the target
-    quality = (cur_diff - prevResidual)/b_len    # how much better did this line make the result
+    quality = (cur_diff - prevResidual)/(b_len**2)    # how much better did this line make the result
+    #quality = (cur_diff - prevResidual) / (b_len)
     quality += abs(quality) * 10 * p2.heat # attenuate by previously visited
     return (quality, ind, cur_diff, length)
 
@@ -354,10 +369,21 @@ def draw_points(image, pnts, size=1):
     draw = ImageDraw.Draw(image, mode="RGBA")
     if w < 1 :
         for p in pnts.p:
-            draw.point((p.x, p.y), (255,int(255*(1.0-p.heat)),0,255))
+
+            if p.ignore:
+                col = (0, 100, 255, 255)
+            else:
+                col = (255, int(255 * (1.0 - p.heat)), 0, 255)
+
+            draw.point((p.x, p.y), col)
     else:
         for p in pnts.p:
-            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=(255,int(255*(1.0-p.heat)),0,127), outline=(255,255,255,255))
+
+            if p.ignore:
+                col = (0, 100, 255, 120)
+            else:
+                col = (255, int(255 * (1.0 - p.heat)), 0, 120)
+            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=col, outline=(255,255,255,255))
 
     return image
 
@@ -369,25 +395,23 @@ def draw_thread(image, pnt1, pnt2, color):
     return image
 
 
-def image_diff(image, targetArray):
+def image_diff(image, targetArray, np_image=None):
 
     #image = image.filter(ImageFilter.GaussianBlur(2))
 
-    lum = image.getchannel("R")
-    #np_image = numpy.array(image)[:,:,1].astype("float32")
-    np_image = numpy.array(lum).astype("float32")
-    np_image = numpy.multiply(np_image, 1.0/255, out=np_image)
-    #error = np_image-targetArray
+    if type(np_image) == type(None):
+        lum = image.getchannel("R")
+        np_image = numpy.array(lum, dtype="float32")
+        np_image = numpy.multiply(np_image, 1.0/255, out=np_image)
+
     error = numpy.subtract(np_image, targetArray, out=np_image)
 
-    #nul = numpy.zeros(error.shape)
     better = numpy.clip(error, -2000000000, 0)
     worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 5, out=error)
     error = numpy.add(better, worse, out=error)
-    error = numpy.multiply(error, error, out=error)
-    #error = numpy.abs(error, out=error)
+    #error = numpy.multiply(error, error, out=error) # error**2
+    error = numpy.abs(error, out=error)
 
-    #error = (better+worse)**2 # error squred
     return numpy.sum(error)
 
 
@@ -404,20 +428,20 @@ if __name__ == '__main__':
 
     app = QtGui.QApplication(sys.argv)
 
-    ppm = 0.3/500 # pixels per meter
+    mpp = 0.3/500 # meters per pixel
     params = {
-        "proc_width":500,
-        "proc_height":500,
-        "ppi": ppm,
+        "proc_width":500,       # image size
+        "proc_height":500,      #
+        "ppi": mpp,             # scale factor to real world, meters per pixel
         #"grid_resX":25,
         #"grid_resY":25,
-        "nailDistMin": 6.0 / 1000.0 / ppm,
-        "nailDistMax": 16.0 / 1000.0 / ppm,
-        "backgroundColor":(0,0,0),
-        "threadColor":(255, 255, 255, 20),
+        "nailDistMin": 6.0 / 1000.0 / mpp,      # minimum nail distance
+        "nailDistMax": 16.0 / 1000.0 / mpp,     # maximum nail distance
+        "backgroundColor":(0,0,0),              # canvas color
+        "threadColor":(255, 255, 255, 20),      # string color
         "currentPoint" : 0,
         "lastPoint": -1,
-        "start_at": (0.5,0)
+        "start_at": (0.5,0)                     # closest point to start in rel coords [0..1]
     }
 
 
@@ -465,12 +489,16 @@ t16: increased Detail pull a bit, added heat, complete overhaul
 t17: points on edges
 t18: retry penalty, smaller min dist, white point lowered
 t19: least squared, more edge points, less opacity thread, darker target
+t20: removed done pixels from target (set to black...questionable)
+t21: masked outside pixels, normalized to l**2
+t22: error not squared
 
 ideas: scipy draw line directly into numpy array, skip pillow conversions
-        do error calculation of blurred picture (preliminary tests have shown no improvements, 10x slower)
+        do error calculation of blurred picture (preliminary tests have shown no improvements, 10x slower) maybe try adding the blurred test to the non blurred test, so halftones in surrounding area add to the sharp comparison
         using max num connections for nail selection based on brighness
         find out how what causes endless loops
         add nail collision detection
         increase nail density in areas with higher frequency detail
         errors should have a magnitude more weight then improvements
+        try binary quality, -1, 1 for good and bad pixels instead of distance
 """

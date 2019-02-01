@@ -1,15 +1,16 @@
 import math
 import random
 import numpy as np
-from scipy.spatial import Delaunay, ConvexHull
+from scipy.spatial import Delaunay, cKDTree
 from PIL import ImageDraw
 
 class Point2(object):
 
-    def __init__(self, x=0.0, y=0.0, heat=0.0):
+    def __init__(self, x=0.0, y=0.0, heat=0.0, ignore=False):
         self.x = x
         self.y = y
         self.heat = heat
+        self.ignore = ignore
 
     def __repr__(self):
         return "({:.3f}, {:.3f})".format(self.x, self.y)
@@ -17,17 +18,20 @@ class Point2(object):
     def dist(self, other):
         return math.sqrt((self.x-other.x)**2 + (self.y-other.y)**2)
 
+    def dist2(self, other):
+        return (self.x-other.x)**2 + (self.y-other.y)**2
+
     def clamped(self, minx, maxx, miny, maxy):
-        return Point2( max(minx, min(maxx, self.x)), max(miny, min(maxy, self.y)), self.heat )
+        return Point2( max(minx, min(maxx, self.x)), max(miny, min(maxy, self.y)), self.heat, self.ignore )
 
     def __mul__(self, other):
-        return Point2(self.x*other, self.y*other, self.heat)
+        return Point2(self.x*other, self.y*other, self.heat, self.ignore)
 
     def __add__(self, other):
-        return Point2(self.x+other.x, self.y+other.y, self.heat)
+        return Point2(self.x+other.x, self.y+other.y, self.heat, self.ignore)
 
     def __sub__(self, other):
-        return Point2(self.x-other.x, self.y-other.y, self.heat)
+        return Point2(self.x-other.x, self.y-other.y, self.heat, self.ignore)
 
 
 def remap(val, from_min, from_max, to_min, to_max):
@@ -40,6 +44,7 @@ class PointCloud(object):
         self.p = []
         self.width = dimx
         self.height = dimy
+        self.kd = None
 
 
     def addGrid(self, w, h, offset=0.5):
@@ -66,6 +71,15 @@ class PointCloud(object):
 
         for pnt in self.p:
             pnt.heat = temp
+
+
+    def maskPoints(self, maskImg, thresh):
+
+        for pt in self.p:
+            msk = maskImg.getpixel((pt.x, pt.y))/255.0
+            if msk <= thresh:
+                pt.ignore = True
+
 
 
     def scatterOnMask(self, maskImg, numPoints, minDist, threshold = 0.2):
@@ -158,10 +172,10 @@ class PointCloud(object):
                         det = remap(det, 0, 255, maxDist/l, minDist/l)
                         f *= 1.0 - det / iterations
 
-                    if self.p[i].heat <= 0.0:
+                    if self.p[i].heat <= 0.0 and not self.p[i].ignore:
                         self.p[i] = (self.p[i] - mp) * f + mp
                         self.p[i] = self.p[i].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
-                    if self.p[j].heat <= 0.0:
+                    if self.p[j].heat <= 0.0 and not self.p[j].ignore:
                         self.p[j] = (self.p[j] - mp) * f + mp
                         self.p[j] = self.p[j].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
                     edgedone.add(pair)
@@ -171,10 +185,15 @@ class PointCloud(object):
 
     def closestPoint(self, x, y):
 
+        #if not self.kd:
+        #    self.npp = np.array([(pt.x, pt.y) for pt in self.p])
+        #    self.kd = cKDTree(self.npp)
+
         to = Point2(x, y)
-        dst = [[pnt.dist(to), i] for i,pnt in enumerate(self.p)]
+        dst = [[pnt.dist2(to), i] for i,pnt in enumerate(self.p) if not pnt.ignore]
         dst.sort()
         return dst[0][1]
+
 
 
     def findNeighbours(self, pnt, max_radius):
@@ -183,6 +202,9 @@ class PointCloud(object):
         # for now just return everything but the given point
         #ret = range(len(pnts))
         #del ret[pnt]
-        ret = [i for i in xrange(len(self.p)) if (i != pnt and self.p[pnt].dist(self.p[i]) < max_radius)]
+        r = max_radius**2
+        ret = [i for i in xrange(len(self.p)) if (i != pnt and not self.p[i].ignore and self.p[pnt].dist2(self.p[i]) < r)]
 
+        random.seed(73674)
+        random.shuffle(ret)
         return ret
