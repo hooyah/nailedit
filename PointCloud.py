@@ -24,14 +24,34 @@ class Point2(object):
     def clamped(self, minx, maxx, miny, maxy):
         return Point2( max(minx, min(maxx, self.x)), max(miny, min(maxy, self.y)), self.heat, self.ignore )
 
+    def dot(self, other):
+        return self.x * other.x + self.y * other.y
+
+    def asTupple(self):
+        return (self.x, self.y)
+
     def __mul__(self, other):
         return Point2(self.x*other, self.y*other, self.heat, self.ignore)
+
+    def __div__(self, other):
+        return Point2(self.x/other, self.y/other, self.heat, self.ignore)
 
     def __add__(self, other):
         return Point2(self.x+other.x, self.y+other.y, self.heat, self.ignore)
 
     def __sub__(self, other):
         return Point2(self.x-other.x, self.y-other.y, self.heat, self.ignore)
+
+
+def project(a, b, c):
+    """ project a on bc"""
+
+    d = (c - b) / c.dist(b)
+    v = a - b
+    t = v.dot(d)
+    p = b + d * t
+    return p
+
 
 
 def remap(val, from_min, from_max, to_min, to_max):
@@ -86,17 +106,34 @@ class PointCloud(object):
 
         print 'scattering',numPoints,'points'
         random.seed(4826)
+        # brute force
         num = 0
         fail = 0
-        while num < numPoints and fail < numPoints*10:
-            pt = Point2(random.uniform(1, self.width-1.01), random.uniform(1,self.height-1.01))
-            msk = maskImg.getpixel((pt.x, pt.y))/255.0
-            if msk >= threshold :
-                if len(self.p) and self.p[self.closestPoint(pt.x, pt.y)].dist(pt) < minDist:
-                    fail += 1
-                    continue
-                num += 1
+        #while num < numPoints and fail < numPoints*10:
+        #    pt = Point2(random.uniform(1, self.width-1.01), random.uniform(1,self.height-1.01))
+        #    msk = maskImg[int(pt.y)][int(pt.x)]
+        #    if msk >= threshold :
+        #        if len(self.p) and self.p[self.closestPoint(pt.x, pt.y)].dist(pt) < minDist:
+        #            fail += 1
+        #            continue
+        #        num += 1
+        #        self.p.append(pt)
+
+        np.random.seed(64726)
+        f = maskImg.flatten()
+        interesting = np.where(f >= threshold)[0]
+        np.random.shuffle(interesting)
+        for i in interesting:
+            pt = Point2(float(i % maskImg.shape[1]), float(i / maskImg.shape[1]))
+            if len(self.p)==0 or self.closestPoint(pt.x, pt.y)[1] >= minDist:
                 self.p.append(pt)
+                num += 1
+                if num >= numPoints:
+                    break
+            else:
+                fail += 1
+                if fail >= numPoints*10:
+                    break
 
         print "successfully scattered", num, "of", numPoints, "points"
 
@@ -107,13 +144,14 @@ class PointCloud(object):
         npp = np.array([[pnt.x,pnt.y] for pnt in self.p])
         tri = Delaunay(npp)
 
+        msk = [pt.heat for pt in self.p]
         # mask the autside border
         for t_ind, ns in enumerate(tri.neighbors):
             for n_ind, n in enumerate(ns):
                 if n == -1:
                     for i in [0,1,2]:
                         if i != n_ind:
-                            self.p[tri.simplices[t_ind][i]].heat = 1.0
+                            msk[tri.simplices[t_ind][i]] = 1.0
 
         # draw mesh
         if image:
@@ -167,15 +205,16 @@ class PointCloud(object):
                     mp = (self.p[i] + self.p[j]) * 0.5
 
                     # scale lenght by detail image
-                    if detail_img:
-                        det = detail_img.getpixel((mp.x, mp.y))
-                        det = remap(det, 0, 255, maxDist/l, minDist/l)
+                    if not isinstance(detail_img, type(None)):
+                        #det = detail_img.getpixel((mp.x, mp.y))
+                        det = detail_img[int(mp.y)][int(mp.x)]
+                        det = remap(det, 0., 1., maxDist/l, minDist/l)
                         f *= 1.0 - det / iterations
 
-                    if self.p[i].heat <= 0.0 and not self.p[i].ignore:
+                    if msk[i] <= 0.0 and not self.p[i].ignore:
                         self.p[i] = (self.p[i] - mp) * f + mp
                         self.p[i] = self.p[i].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
-                    if self.p[j].heat <= 0.0 and not self.p[j].ignore:
+                    if msk[j] <= 0.0 and not self.p[j].ignore:
                         self.p[j] = (self.p[j] - mp) * f + mp
                         self.p[j] = self.p[j].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
                     edgedone.add(pair)
@@ -183,27 +222,34 @@ class PointCloud(object):
         #print len(self.p), len(tri.points), np.max(tri.simplices)
 
 
-    def closestPoint(self, x, y):
+    def closestPoint(self, x, y, thatsNot=-1):
 
         #if not self.kd:
         #    self.npp = np.array([(pt.x, pt.y) for pt in self.p])
         #    self.kd = cKDTree(self.npp)
 
         to = Point2(x, y)
-        dst = [[pnt.dist2(to), i] for i,pnt in enumerate(self.p) if not pnt.ignore]
+        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if not pnt.ignore and i != thatsNot]
         dst.sort()
-        return dst[0][1]
+        return dst[0][1], math.sqrt(dst[0][0])
+
+    def closestPoints(self, x, y, radius, thatsNot=-1):
+
+        radius = radius*radius
+        to = Point2(x, y)
+        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if not pnt.ignore and i != thatsNot]
+        ret = [d[1] for d in dst if d[0] <= radius]
+        return ret
 
 
-
-    def findNeighbours(self, pnt, max_radius):
+    def findNeighbours(self, pntInd, max_radius):
 
         #grid
         # for now just return everything but the given point
         #ret = range(len(pnts))
         #del ret[pnt]
         r = max_radius**2
-        ret = [i for i in xrange(len(self.p)) if (i != pnt and not self.p[i].ignore and self.p[pnt].dist2(self.p[i]) < r)]
+        ret = [i for i in xrange(len(self.p)) if (i != pntInd and not self.p[i].ignore and self.p[pntInd].dist2(self.p[i]) < r)]
 
         random.seed(73674)
         random.shuffle(ret)
