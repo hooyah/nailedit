@@ -6,14 +6,18 @@ from PIL import ImageDraw
 
 class Point2(object):
 
-    def __init__(self, x=0.0, y=0.0, heat=0.0, ignore=False):
+    def __init__(self, x=0.0, y=0.0, heat=0.0, ignore=False, numConnects=0):
         self.x = x
         self.y = y
         self.heat = heat
         self.ignore = ignore
+        self.numConnects = numConnects
 
     def __repr__(self):
         return "({:.3f}, {:.3f})".format(self.x, self.y)
+
+    def length(self):
+        return math.sqrt(self.x**2 + self.y**2)
 
     def dist(self, other):
         return math.sqrt((self.x-other.x)**2 + (self.y-other.y)**2)
@@ -22,25 +26,73 @@ class Point2(object):
         return (self.x-other.x)**2 + (self.y-other.y)**2
 
     def clamped(self, minx, maxx, miny, maxy):
-        return Point2( max(minx, min(maxx, self.x)), max(miny, min(maxy, self.y)), self.heat, self.ignore )
+        return Point2( max(minx, min(maxx, self.x)), max(miny, min(maxy, self.y)), self.heat, self.ignore, self.numConnects )
 
     def dot(self, other):
         return self.x * other.x + self.y * other.y
+
+    def cross25D(self, other):
+        """ returns the z component of the cross product with the two vectors assumed to lay in the xy plane with z=0 """
+
+        return self.x * other.y - other.x * self.y
+
 
     def asTupple(self):
         return (self.x, self.y)
 
     def __mul__(self, other):
-        return Point2(self.x*other, self.y*other, self.heat, self.ignore)
+        if isinstance(other, Point2):
+            return Point2(self.x * other.x, self.y * other.x, self.heat, self.ignore, self.numConnects)
+        else:
+            return Point2(self.x*other, self.y*other, self.heat, self.ignore, self.numConnects)
 
     def __div__(self, other):
-        return Point2(self.x/other, self.y/other, self.heat, self.ignore)
+        return Point2(self.x/other, self.y/other, self.heat, self.ignore, self.numConnects)
 
     def __add__(self, other):
-        return Point2(self.x+other.x, self.y+other.y, self.heat, self.ignore)
+        return Point2(self.x+other.x, self.y+other.y, self.heat, self.ignore, self.numConnects)
 
     def __sub__(self, other):
-        return Point2(self.x-other.x, self.y-other.y, self.heat, self.ignore)
+        return Point2(self.x-other.x, self.y-other.y, self.heat, self.ignore, self.numConnects)
+
+
+
+class Circle2(object):
+
+    def __init__(self, x, y, r):
+
+        self.p = Point2(x,y)
+        self.r = r
+
+    def tangentP(self, vect):
+        """ given a vector, returns the two points of tangency"""
+        norm = Point2(vect.y, -vect.x)/vect.length()
+        return [ self.p+norm*self.r, self.p-norm*self.r ]
+
+    def normals(self, vect):
+        """ given a vector, returns two vectors pointing to the two points of tangency"""
+        norm = Point2(vect.y, -vect.x) / vect.length() * self.r
+        return [norm, norm*-1]
+
+    def intersectRay(self, p1, p2):
+        a = (p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2
+        b = 2 * ((p2.x - p1.x) * (p1.x - self.p.x) + (p2.y - p1.y) * (p1.y - self.p.y))
+        c = (p1.x - self.p.x) ** 2 + (p1.y - self.p.y) ** 2 - self.r ** 2
+        bsq = b**2 - 4*a*c
+
+        #print "intersect",self.p.x, self.p.y, self.r
+        #print a, b, c, bsq
+        if bsq >=0 and a != 0.0:
+            bsq = math.sqrt(bsq)
+            t = [ (-b - bsq)/(2*a), (-b + bsq)/(2*a) ]
+            rp1 = (p2-p1)*t[0]+p1
+            rp2 = (p2-p1)*t[1]+p1
+            #print "ip:", t[0], t[1], rp1, rp2
+            if rp1.dist2(rp2) < 1e-4:
+                return [rp1]
+            else:
+                return [rp1,rp2]
+        return []
 
 
 def project(a, b, c):
@@ -51,6 +103,37 @@ def project(a, b, c):
     t = v.dot(d)
     p = b + d * t
     return p
+
+
+def project_param(a, b, c):
+    """ project a on bc, returns t as  p = (1-t)*a + t*b """
+
+    t = (a - b).dot(c - b) / float(b.dist2(c))
+    return t
+
+def intersect_line(a1, a2, b1, b2):
+    """
+    :param a1: Point2
+    :param a2: Point2
+    :param b1: Point2
+    :param b2: Point2
+    :return: s, t, i1=a1 + t*a2,  i2=b1 + s*b2
+    """
+
+    s1_x = float(a2.x - a1.x)
+    s1_y = float(a2.y - a1.y)
+    s2_x = float(b2.x - b1.x)
+    s2_y = float(b2.y - b1.y)
+
+    dr = (-s2_x * s1_y + s1_x * s2_y)
+    if dr != 0:
+        s =  (s2_x * (a1.y - b1.y) - s2_y * (a1.x - b1.x)) / dr
+        t = (-s1_y * (a1.x - b1.x) + s1_x * (a1.y - b1.y)) / dr
+    else:
+        s = 1e6
+        t = 1e6
+
+    return s, t
 
 
 
@@ -80,6 +163,23 @@ class PointCloud(object):
 
         random.seed(1234)
         self.p += [Point2(random.uniform(0, float(self.width)-0.01), random.uniform(0,float(self.height)-0.01)) for n in xrange(num)]
+
+    def addFromList(self, coordList):
+
+        self.p += [Point2(l[0],l[1]) for l in coordList]
+
+
+    def translate(self, x, y):
+
+        offs = Point2(x, y)
+        for pt in self.p:
+            pt += offs
+
+    def scale(self, sx, sy):
+
+        for pt in self.p:
+            pt.x *= sx
+            pt.y *= sy
 
 
     def cool(self, f=0.1):
@@ -254,3 +354,27 @@ class PointCloud(object):
         random.seed(73674)
         random.shuffle(ret)
         return ret
+
+
+    def findPointsNearRay(self, p1, p2, maxDist):
+        """ returns all points that are closer then maxDist from the line """
+
+        A = np.array([pt.asTupple() for pt in self.p])
+        B = np.repeat((p1.asTupple(),), len(A), axis=0)
+        C = np.repeat((p2.asTupple(),), len(A), axis=0)
+
+        lenBC = p1.dist(p2)
+
+        # project A onto BC (all the points onto the line)
+        CB = C - B
+        D = CB / lenBC
+        V = A - B
+        t = (V*D).sum(-1)[...,np.newaxis] # dot product element wise
+        P = B + D * t
+        AP = (A - P)
+        distSqr = (AP**2).sum(-1)[..., np.newaxis]
+
+        maxDist = maxDist**2
+        onLine = [(t[i][0]/lenBC, i) for i in xrange(len(A)) if distSqr[i][0] <= maxDist]
+
+        return onLine
