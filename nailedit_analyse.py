@@ -251,7 +251,7 @@ class Viewer(QtGui.QMainWindow):
 
         engine = gc()
         code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:self.cutoffSlider.value()], minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1/6)*w)
-        #code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:20], minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1)*w)
+        #code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:400], minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1)*w)
         if code:
             with open(filename, "w") as f:
                 f.write(code)
@@ -346,9 +346,9 @@ def draw_nails(nails, img, showNails=True, lastString=10 ** 7, targetImage=None,
     # over sampling
     mmpp = params["ppi"]/0.001 #mm per pixel
     threadThickness = 0.3 # mm
-    oversampling = 1
+    oversampling = 3
     w = params["proc_width"] * mmpp
-    h = params["proc_width"] * mmpp
+    h = params["proc_height"] * mmpp
     iw = int(w / threadThickness * oversampling)
     ih = int(h / threadThickness * oversampling)
     img_hi = Image.new("RGB", (int(iw), int(ih)))

@@ -156,13 +156,13 @@ class PointCloud(object):
         #return [Point2(float(x)/(w-1)+random.uniform(-.5,.5)*(1.0/(w-1)),float(y)/(h-1)+random.uniform(-.5,.5)*(1.0/(h-1))) for x in xrange(w) for y in xrange(h)]
 
         # offset
-        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for x in xrange(int(w)) for y in xrange(int(h))]
-        self.p += [Point2(p.x*(self.width-0.01), p.y*(self.height-0.01)) for p in pt if p.x <= 1.0]
+        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for y in xrange(int(h)) for x in xrange(int(w if (y%2==0) else (w-1)))]
+        self.p += [Point2(p.x*(self.width-1), p.y*(self.height-1)) for p in pt]
 
     def addRandom(self, num):
 
         random.seed(1234)
-        self.p += [Point2(random.uniform(0, float(self.width)-0.01), random.uniform(0,float(self.height)-0.01)) for n in xrange(num)]
+        self.p += [Point2(random.uniform(0, float(self.width-1)), random.uniform(0,float(self.height-1))) for n in xrange(num)]
 
     def addFromList(self, coordList):
 
@@ -245,7 +245,7 @@ class PointCloud(object):
         tri = Delaunay(npp)
 
         msk = [pt.heat for pt in self.p]
-        # mask the autside border
+        # mask the outside border
         for t_ind, ns in enumerate(tri.neighbors):
             for n_ind, n in enumerate(ns):
                 if n == -1:

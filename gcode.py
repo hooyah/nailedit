@@ -18,11 +18,11 @@ class Mach3:
 
         self.startZ = 0.6
         self.threadThickness = 0.25
-        self.maxZ = 8.0
+        self.maxZ = 6.0
         self.ramp_angle = 15 # degrees
-        self.z_hop = 3
+        self.z_hop = 0 # 3
 
-        self.numNailConnects = None
+        self.nailThreadHeights = None
         self.ramp_A_p = None
         self.ramp_A_z = 0
         self.ramp_B_p = None
@@ -71,6 +71,10 @@ class Mach3:
 
     def moveTo_ramped(self, x=None, y=None, feed=None, rapid=False):
         """ flipped X/Y"""
+
+        if self.z_hop == 0:
+            self.moveTo(x, y, self.ramp_B_z, feed, rapid)
+            return
 
         if x is None:
             x = self.mposX
@@ -193,16 +197,16 @@ class Mach3:
         self.moveTo_ramped(p2.x, p2.y)
 
 
-    def calc_num_intersects(self, up_to):
+    def calc_num_intersects(self, from_c, to_c):
 
         inters = 0
         con = self.connects
-        p4 = self.pc.p[con[up_to]]
-        p3 = self.pc.p[con[up_to-1]]
+        p4 = self.pc.p[con[to_c]]
+        p3 = self.pc.p[con[to_c - 1]]
 
-        if up_to > 1:
-            p1 = self.pc.p[con[0]]
-            for c in con[1:up_to]:
+        if to_c > from_c + 1:
+            p1 = self.pc.p[con[from_c]]
+            for c in con[from_c+1:to_c]:
                 p2 = self.pc.p[c]
                 s,t = intersect_line(p1,p2,p3,p4)
                 if 0 < s < 1 and 0 < t < 1:
@@ -252,7 +256,7 @@ class Mach3:
         self.pc = PointCloud(100,100)
         self.pc.addFromList(nails)
         self.connects = connects
-        self.numNailConnects = [0]*len(nails)
+        self.nailThreadHeights = [0.0] * len(nails)
 
         # transform points into target space
         self.pc.translate(-origin.x, -origin.y)
@@ -272,22 +276,38 @@ class Mach3:
 
         percentDone = 0
         max_height = 0
-        lastZ = self.startZ
+        currentZ = self.startZ
         lastNail = -1
         string_length = 0
+        current_loop_start = 0
+        last_pause_at = 0
 
-        for i, nail in enumerate(connects[:-1]):
+        for pathId, nailId in enumerate(connects[:-1]):
         #for i, nail in enumerate(connects[:20]):
 
             #move to current nail
-            cur_pos  = self.pc.p[nail]
-            next_pos = self.pc.p[connects[i+1]]
+            cur_pos  = self.pc.p[nailId]
+            next_pos = self.pc.p[connects[pathId+1]]
 
-            # height of thread on nail
-            z = self.startZ + self.numNailConnects[nail] * self.threadThickness
-            if z > self.maxZ:
-                print "maxZ clamped", z
-            z = min(z, self.maxZ)
+            #z = currentZ
+            # first check if this next segment intersects the loop
+            if self.calc_num_intersects(current_loop_start, pathId) > 0:
+                #yep, so the string will raise up
+                currentZ += self.threadThickness
+                # start a new loop, because everything that came before will be below new strings
+                current_loop_start = pathId
+            # next check if the string on the nail is already at current height
+            if self.nailThreadHeights[nailId] >= currentZ:
+                #yep, nail already visited by this loop, raise it
+                currentZ += self.threadThickness
+
+            if currentZ - last_pause_at > self.maxZ:
+                print "maxZ reached", currentZ, pathId
+                print "adding pause"
+                self.addPause()
+                last_pause_at = currentZ
+            #currentZ = min(currentZ, self.maxZ)
+
 
             string_length += Point2(cur_pos.x, cur_pos.y).dist(Point2(self.mposX, self.mposY))
 
@@ -309,15 +329,14 @@ class Mach3:
                 p1 = circumference.p + norms[1]
                 p2 = tangs[1]
 
-            self.update_z_ramp(Point2(self.mposX, self.mposY), lastZ, p1, z)
-            self.moveTo_withAvoid(x=p1.x, y=p1.y, minDist=minNailDistance, ignoreNails=[nail, lastNail])
+            self.update_z_ramp(Point2(self.mposX, self.mposY), self.mposZ, p1, currentZ)
+            self.moveTo_withAvoid(x=p1.x, y=p1.y, minDist=minNailDistance, ignoreNails=[nailId, lastNail])
             self.arcTo(p2.x, p2.y, self.mposZ, cur_pos.x, cur_pos.y, ccw=clock >= 0)
 
-            self.numNailConnects[nail] += 1
-            lastZ = z
-            lastNail = nail
+            self.nailThreadHeights[nailId] = currentZ
+            lastNail = nailId
 
-            perc = int(float(i) / len(connects) * 100)
+            perc = int(float(pathId) / len(connects) * 100)
             if perc != percentDone:
                 print "generating gcode: %d%%"%perc, "max_intersects", max_height
                 percentDone = perc
@@ -326,7 +345,7 @@ class Mach3:
         self.addEnd()
 
         self.addComment(" String: %d m "%int(string_length/1000), prepend=True)
-        self.addComment(" Num connects: %d, maxNailVisits: %d "%(len(connects), max(self.numNailConnects)), prepend=True)
+        self.addComment(" Num connects: %d, maxNailVisits: %d " % (len(connects), max(self.nailThreadHeights)), prepend=True)
         self.addComment(name, prepend=True)
 
         return "\n".join(self.program)

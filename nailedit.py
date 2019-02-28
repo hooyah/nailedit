@@ -11,6 +11,7 @@ import time
 import json, numbers
 
 
+
 def is_jsonable(x):
     try:
         json.dumps(x)
@@ -69,7 +70,7 @@ class Viewer(QtGui.QMainWindow):
         self.imgCounter = 0
         self.outPath = "Q:\\Projects\\code\\nailedit\\render\\img_{:04d}.jpg"
         self.save_image = False
-        self.currentWidth = 2
+        self.currentWidth = 1
         self.currentDensity = 0.1 # not used
         self.threadCol = [self.parameters["threadColor"][0]/255.0, self.parameters["threadColor"][1]/255.0]
 
@@ -170,8 +171,9 @@ class Viewer(QtGui.QMainWindow):
             self.timer.start(1000)
 
         else:
-            npt = ndimage.filters.gaussian_filter(self.np_targetArray, self.currentWidth)
-            self.blurredTarget = numpy.clip(npt, 0, self.currentDensity)/self.currentDensity
+            npt = ndimage.filters.gaussian_filter(self.np_targetArray, self.parameters["blurAmount"])
+            self.blurredTarget = npt #numpy.clip(npt, 0, self.currentDensity)/self.currentDensity
+            self.showImage(self.blurredTarget, slot=1)
 
             self.disconnect(self.timer, QtCore.SIGNAL("timeout()"), self.workImage)
             self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.workPoints)
@@ -184,6 +186,7 @@ class Viewer(QtGui.QMainWindow):
         targetImage = self.parameters["TargetImage"]
         currentImage = self.parameters["CurrentImage"]
         currentImage[:] = self.parameters["backgroundColor"]
+        img = array_to_PIL_rgb(currentImage)
 
         minDist = self.parameters["nailDistMin"]
         maxDist = self.parameters["nailDistMax"]
@@ -209,38 +212,53 @@ class Viewer(QtGui.QMainWindow):
                     return
 
 
-            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=0.25)
+            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=0.5)
             pc.heat(1.0)
 
             img = array_to_PIL_rgb(self.parameters["EdgesImage"])
             img = draw_points(img, pc, 3)
             self.showImage(img, slot=1)
 
-            gridDistX = img_w / maxDist
-            gridDistY = img_h / maxDist
-            pc.addGrid(gridDistX, gridDistY)
-            pc.addRandom(int(gridDistX * gridDistY * 0.3))
+            numx = int((img_w / maxDist) / numpy.sqrt(2))
+            numy = int(img_h / maxDist)
+            if numy % 2 == 0: # make sure we have an odd number of lines (to avoid the last line being an offset line)
+                numx += 1
+                numy += 1
+            print "grid", numx, numy
+            gridstart = len(pc.p)
+            pc.addGrid(numx, numy)
+            for i in xrange(0, numy, 2):  # mask grid rim
+                linestart = gridstart + i*numx - (i/2)
+                pc.p[linestart].heat = 1.0
+                pc.p[linestart + (numx-1)].heat = 1.0
+            for i in xrange(numx):
+                pc.p[gridstart+i].heat = 1.0
+                pc.p[gridstart + i + (numy-1)*numx-((numy-1)/2)].heat = 1.0
+            pc.addRandom(int(numx * numy * 0.3))
 
             #pc.maskPoints(targetImage, 0.03)
 
-            self.timer.start(10)
+            draw_points(img, pc, 3)
+            self.showImage(img)
+            self.timer.start(5000)
             return
 
 
         if self.iterationCounter < 50:
-            img = array_to_PIL_rgb(currentImage)
+            #img = array_to_PIL_rgb(currentImage)
             pnts.relax(img, 10, self.parameters["DetailImage"], minDist, maxDist)
             draw_points(img, pnts)
 
             self.showImage(img)
             self.iterationCounter += 1
+            self.timer.start(10)
 
 
         elif self.iterationCounter == 50:     # debugging
 
-            foo = Image.new("RGB", targetImage.size)
+            #foo = array_to_PIL_rgb(currentImage)#Image.new("RGB", targetImage.size)
 
-            draw = ImageDraw.Draw(foo, "RGB")
+            draw = ImageDraw.Draw(img, "RGB")
 
             problems = [0]*len(pnts.p)
             for me,p in enumerate(pnts.p) :
@@ -261,7 +279,9 @@ class Viewer(QtGui.QMainWindow):
                 problems = [ (prob, id) for id,prob in enumerate(problems)]
                 problems.sort(reverse=True)
                 del pnts.p[problems[0][1]]
-                self.iterationCounter -= 1
+               # self.iterationCounter -= 1
+                pnts.relax(None, 10, self.parameters["DetailImage"], minDist, maxDist)
+
 
             else:
                 # last ditch check including all points (even the ones on edges)
@@ -271,10 +291,12 @@ class Viewer(QtGui.QMainWindow):
                     if len(cps):
                         numOffenders +=1
                 print "point cleanup done. number of minDists:", numOffenders
+                print "number of nails", len(pnts.p)
+                self.iterationCounter += 1
 
 
 
-            self.showImage(foo)
+            self.showImage(img)
             self.timer.start(10)
 
 
@@ -309,9 +331,16 @@ class Viewer(QtGui.QMainWindow):
         pnts = self.parameters["PointCloud"]
         current_point_idx = self.parameters["currentPoint"]
         last_point_idx = self.parameters["lastPoint"]
-        maxConnects = self.parameters["macConnectsPerNail"]
+        maxConnects = self.parameters["maxConnectsPerNail"]
+        blurAmount = self.parameters["blurAmount"]
+        searchRadius = self.parameters["searchRadius"]
 
-
+        # test #######################################################
+        if self.iterationCounter > 0 and not self.iterationCounter%300:
+            self.parameters["blurAmount"] *= 0.9
+            blurAmount = self.parameters["blurAmount"]
+            npt = ndimage.filters.gaussian_filter(self.np_targetArray, self.parameters["blurAmount"])
+            self.blurredTarget = npt  # numpy.clip(npt, 0, self.currentDensity)/self.currentDensity
 
         #############################################################
 
@@ -320,7 +349,7 @@ class Viewer(QtGui.QMainWindow):
         # get most reasonable neightbors
         neighbours_idx = pnts.p[current_point_idx].neighbors
         if neighbours_idx == None:
-            neighbours_idx = pnts.findNeighbours(current_point_idx, self.parameters["proc_width"]*0.25)
+            neighbours_idx = pnts.findNeighbours(current_point_idx, self.parameters["proc_width"]*searchRadius)
             remove_nail_collisions(pnts, current_point_idx, neighbours_idx, self.parameters["nailDiameter"]/2)
             pnts.p[current_point_idx].neighbors = neighbours_idx
 
@@ -328,24 +357,28 @@ class Viewer(QtGui.QMainWindow):
         #neighbours_idx = [n for n in neighbours_idx if pnts.p[n].numConnects < maxConnects]
 
         # check how good the neighbours are
-        col = self.threadColor
+        col = self.threadCol
 
 
         # clamp current_image with target to accurately detect overshoot
         #max_v = self.np_targetArray.max()
         #currentImage = numpy.clip(currentImage, 0, max_v, out=currentImage)
 
-        params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual, self.blurredTarget, self.currentWidth) for neighbour in neighbours_idx if neighbour != last_point_idx]
+        params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual, self.blurredTarget, self.currentWidth, blurAmount) for neighbour in neighbours_idx if neighbour != last_point_idx]
         candidates = self.threadpool.map(check_quality, params)
         #candidates = [check_quality(p) for p in params]
 
         # fish out the best match
         candidates.sort()
+
+        #if not candidates:
+        #    nid = self.find_next_island(currentImage, pnts, current_point_idx, 0)
+        #    candidates.append( check_quality( (currentImage, pnts.p[current_point_idx], pnts.p[nid], self.np_targetArray, nid, col, self.residual, self.blurredTarget, self.currentWidth) ) )
+
         #candidates.sort(reverse=True)
         bestMatch = candidates[0]
         improvement = bestMatch[0]#self.residual - candidates[0][2]
         residual = bestMatch[2]
-
 
         #if improvement >= 0.0:  # find another island if any
         #    next = find_next_island(currentImage, self.np_targetArray, pnts, current_point_idx, 0)
@@ -379,7 +412,7 @@ class Viewer(QtGui.QMainWindow):
 
 
         print "iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement,
-        print "string {:.1f}m".format(self.string_length), "n",bestMatch[1],"blur:", self.currentWidth
+        print "string {:.1f}m".format(self.string_length), "n",bestMatch[1],"blur:", blurAmount
         #print candidates[:5]
 
 
@@ -390,7 +423,8 @@ class Viewer(QtGui.QMainWindow):
 
         # pretty render
         beauty_image = draw_thread_rgb(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (1.0,.5,.2, 1.), width=self.currentWidth)
-        beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], col[1]), width=self.currentWidth)#(col[0],col[0],col[0]), width=1)
+        #beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], col[1]), width=self.currentWidth)#(col[0],col[0],col[0]), width=1)
+        beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], .25), width=1)
         beauty_image = Image.blend(beauty_image, beauty_image2, 0.1)
         draw_points(beauty_image, pnts)
         self.parameters["BeautyImage"] = beauty_image
@@ -419,6 +453,7 @@ class Viewer(QtGui.QMainWindow):
             numpy.add(df, 0.5, out=df)
             difImage = array_to_PIL_rgb(df)
             difImage = difImage.point((redlut + greenlut + bluelut))
+
             self.showImage(difImage, slot=1)
 
             now = time.time()
@@ -429,6 +464,7 @@ class Viewer(QtGui.QMainWindow):
 
         if self.iterationCounter >= self.parameters["maxIterations"]:
             self.close()
+
 
         if abs(self.avg_improvement) <= 0.001:
             print "no more improvement"
@@ -450,6 +486,15 @@ class Viewer(QtGui.QMainWindow):
         else:
             self.timer.start(10)
 
+    def find_next_island(self, currentImg, pnts, current_idx, search_radius):
+
+        for idx, p in enumerate(pnts.p):
+            if not idx == current_idx:
+                col = getColor(currentImg, p.x, p.y)
+                trg = getColor(self.np_targetArray, p.x, p.y)
+                if col < trg:
+                    return idx
+        return -1
 
 
 
@@ -467,16 +512,6 @@ def Enhance(image, width, height):
 
 def getColor(img, x, y):
     return img[int(y)][int(x)]
-
-def find_next_island(currentImg, targetImg, pnts, current_idx, search_radius):
-
-    for idx, p in enumerate(pnts.p):
-        if not idx == current_idx:
-            col = getColor(currentImg, p.x, p.y)
-            trg = getColor(targetImg, p.x, p.y)
-            if col < trg:
-                return idx
-    return -1
 
 
 def remove_saturated_segments(fromIdx, neighbours, segCounts, maxCount):
@@ -585,10 +620,10 @@ def draw_points(pil_image, pnts, size=1):
         for p in pnts.p:
 
             if p.ignore:
-                col = (0, 100, 255, 120)
+                col = (0, 100, 255, 255)
             else:
-                col = (255, int(255 * (1.0 - p.heat)), 0, 120)
-            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=col, outline=(255,255,0,255))
+                col = (255, int(255 * (1.0 - p.heat)), 0, 255)
+            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=(col[0], col[1], col[2], 120), outline=col)
 
     return pil_image
 
@@ -632,6 +667,7 @@ def draw_thread_qual(imageArray, pnt1, pnt2, color, width, calc_num=True):
     numpix = len(numpy.nonzero(col.flatten())[0]) if calc_num else 0
     msk = 1 - col
     numpy.multiply(col, color[0], out=col)
+
     msk = numpy.multiply(imageArray, msk, out=msk)
     ret = numpy.add(msk, col, out=msk)
     return ret, numpix
@@ -648,16 +684,22 @@ def check_quality(params):
     prevResidual = params[6]
     blurredTarget = params[7]
     width = params[8]
+    blur = params[9]
 
     length = p1.dist(p2)
     b_len = max(int(abs(p1.x-p2.x)+1), int(abs(p1.y-p2.y))+1) # bresenham num pixels drawn
 
+    cur_diff = 0
     new_img, np = draw_thread_qual(img, pnt1=p1, pnt2=p2, color=col, width=width)
     #new_img = draw_thread(img, pnt1=p1, pnt2=p2, color=col, width=width)
-    cur_diff = image_diff(new_img, trg)    # what is the difference to the target
+    #cur_diff = image_diff(new_img, trg)    # what is the difference to the target
 
-    #blurredImg = ndimage.filters.gaussian_filter(new_img, blurAmt)
-    #cur_diff = image_diff(blurredImg, blurredTarget)    # what is the difference to the target
+    if blur > 0.1:
+        blurredImg = ndimage.filters.gaussian_filter(new_img, blur)
+        #cur_diff = image_diff(blurredImg, blurredTarget)    # what is the difference to the target
+        cur_diff += image_diff(blurredImg, blurredTarget)
+    else:
+        cur_diff = image_diff(new_img, trg)    # what is the difference to the target
 
     #quality = (cur_diff - prevResidual)/(b_len**2)    # how much better did this line make the result
     #quality = (cur_diff - prevResidual)
@@ -672,12 +714,13 @@ def image_diff(imageArray, targetArray):
 
     error = numpy.subtract(imageArray, targetArray)
 
-    better = numpy.clip(error, -2000000000, 0)
-    worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 4, out=error)
+    #better = numpy.clip(error, -2000000000, 0)
+    #worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 4, out=error)
     #worse = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 2, out=error)
-    error = numpy.add(better, worse, out=error)
+    #error = numpy.add(better, worse, out=error)
 
     #error = numpy.multiply(error, error, out=error) # error**2
+    #error = numpy.sqrt(error, out=error)
     error = numpy.abs(error, out=error)
 
     return numpy.sum(error)
@@ -696,27 +739,29 @@ if __name__ == '__main__':
 
     app = QtGui.QApplication(sys.argv)
 
-    mpp = 0.3/500 # meters per pixel
+    mpp = 0.3/600 # meters per pixel
     params = {
-        "proc_width":500,       # image size
-        "proc_height":500,      #
+        "proc_width":600,       # image size
+        "proc_height":600,      #
         "ppi": mpp,             # scale factor to real world, meters per pixel
+        "searchRadius": 0.2,
         #"grid_resX":25,
         #"grid_resY":25,
-        "nailDistMin": 6.0 / 1000.0 / mpp,      # minimum nail distance
+        "nailDistMin": 6 / 1000.0 / mpp,      # minimum nail distance
         "nailDistMax": 16.0 / 1000.0 / mpp,     # maximum nail distance
         "nailDiameter": 1.5 / 1000.0 / mpp,       # diameter of the nail for avoidance
-        "backgroundColor":0,                # canvas color
-        "threadColor":(255, 32),                # string color
+        "backgroundColor":0,                      # canvas color
+        "threadColor":(255, 200),                # string color
         "currentPoint" : 0,
         "lastPoint": -1,
         "start_at": (0.5,0),                     # closest point to start in rel coords [0..1]
         "inputImagePath": "einstein2.png",
         "edgesImagePath": "einstein_edges.png",   # optional
-        "maxSegmentConnect": 2,             # max number of times two nails can be connected
-        "macConnectsPerNail": 8,            # max connections per nail
-        "maxIterations":14000,
-        "loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t30.json"
+        "maxSegmentConnect": 3,             # max number of times two nails can be connected
+        "maxConnectsPerNail": 8,            # max connections per nail
+        "maxIterations":10000,
+        "blurAmount" : 6.0,
+        #"loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t30.json"
     }
 
 
@@ -725,6 +770,8 @@ if __name__ == '__main__':
     img = Image.open(params["inputImagePath"])
 
     # 1.1 enhance/conform image
+    params["proc_width"] = int(params["proc_height"]*float(img.width)/img.height)
+    print "input image {:}x{:}, proc dim: {:}x{:}".format(img.width, img.height, params["proc_width"], params["proc_height"])
     img = Enhance(img, params["proc_width"], params["proc_height"])
 
     # 1.2 analyse image
