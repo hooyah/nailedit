@@ -5,7 +5,7 @@ from PIL import ImageQt
 from PointCloud import PointCloud
 import random
 import numpy
-from scipy import ndimage
+from scipy import ndimage, misc as scipy_misc
 from multiprocessing import Pool as ThreadPool
 import time
 import json, numbers
@@ -29,25 +29,34 @@ class Viewer(QtGui.QMainWindow):
 
         self.multiWidget = QtGui.QWidget()
 
-        self.imageLabel = QtGui.QLabel()
+        self.imageLabel = QtGui.QLabel(self.multiWidget)
         self.imageLabel.setBackgroundRole(QtGui.QPalette.Base)
-        self.imageLabel.setSizePolicy(QtGui.QSizePolicy.Ignored,
-                QtGui.QSizePolicy.Ignored)
+        self.imageLabel.setSizePolicy(QtGui.QSizePolicy.Minimum,
+                QtGui.QSizePolicy.Minimum)
         self.imageLabel.setScaledContents(False)
         self.imageLabel.setStyleSheet("border: 0px")
         self.imageLabel.setContentsMargins(0, 0, 0, 0)
 
-        self.imageLabel2 = QtGui.QLabel()
+        self.imageLabel2 = QtGui.QLabel(self.multiWidget)
         self.imageLabel2.setBackgroundRole(QtGui.QPalette.Base)
-        #self.imageLabel2.setSizePolicy(QtGui.QSizePolicy.Ignored,
-        #        QtGui.QSizePolicy.Ignored)
+        self.imageLabel2.setSizePolicy(QtGui.QSizePolicy.Minimum,
+                QtGui.QSizePolicy.Minimum)
         self.imageLabel2.setScaledContents(False)
-        self.imageLabel.setStyleSheet("border: 0px")
+        self.imageLabel2.setStyleSheet("border: 0px")
         self.imageLabel2.setContentsMargins(0, 0, 0, 0)
+
+        self.imageLabel3 = QtGui.QLabel(self.multiWidget)
+        self.imageLabel3.setBackgroundRole(QtGui.QPalette.Base)
+        self.imageLabel3.setSizePolicy(QtGui.QSizePolicy.Minimum,
+                QtGui.QSizePolicy.Minimum)
+        self.imageLabel3.setScaledContents(False)
+        self.imageLabel3.setStyleSheet("border: 0px")
+        self.imageLabel3.setContentsMargins(0, 0, 0, 0)
 
         self.bl = QtGui.QVBoxLayout(self.multiWidget)
         self.bl.addWidget(self.imageLabel)
         self.bl.addWidget(self.imageLabel2)
+        self.bl.addWidget(self.imageLabel3)
 
         self.scrollArea = QtGui.QScrollArea()
         self.scrollArea.setBackgroundRole(QtGui.QPalette.Dark)
@@ -139,6 +148,10 @@ class Viewer(QtGui.QMainWindow):
             self.qim2 = ImageQt.ImageQt(image)   # don't let python clean up the data
             self.imageLabel2.setPixmap(QtGui.QPixmap.fromImage(self.qim2))
             self.imageLabel2.adjustSize()
+        elif slot == 2:
+            self.qim3 = ImageQt.ImageQt(image)   # don't let python clean up the data
+            self.imageLabel3.setPixmap(QtGui.QPixmap.fromImage(self.qim3))
+            self.imageLabel3.adjustSize()
 
 
     def workImage(self):
@@ -422,15 +435,14 @@ class Viewer(QtGui.QMainWindow):
         # Update the UI to reflect that we just did
 
         # pretty render
-        beauty_image = draw_thread_rgb(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (1.0,.5,.2, 1.), width=self.currentWidth)
+        beauty_image = draw_thread_rgb(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (1.0,.2,.1, 1.), width=self.currentWidth)
         #beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], col[1]), width=self.currentWidth)#(col[0],col[0],col[0]), width=1)
-        beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], .25), width=1)
+        beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], .5), width=1)
         beauty_image = Image.blend(beauty_image, beauty_image2, 0.1)
         draw_points(beauty_image, pnts)
         self.parameters["BeautyImage"] = beauty_image
         self.parameters["BeautyImage2"] = beauty_image2
         self.showImage(beauty_image)
-        #self.showImage(currentImage)
 
         if self.save_image and self.iterationCounter%4==0:
             beauty_image.save(self.outPath.format(self.imgCounter))
@@ -446,7 +458,8 @@ class Viewer(QtGui.QMainWindow):
             #difImage = ImageChops.subtract(self.targetImage, currentImage.getchannel("R"), 2, 127)
             #difImage = Image.merge("RGB", (difImage, difImage, difImage))
             #df = self.blurredTarget - ndimage.filters.gaussian_filter(currentImage, self.currentBlur)
-            df = currentImage - self.np_targetArray
+            sb = sel_blur(currentImage,self.np_targetArray)
+            df = sb - self.np_targetArray
             df = df
 
             numpy.multiply(df, 0.5, out=df)
@@ -455,6 +468,7 @@ class Viewer(QtGui.QMainWindow):
             difImage = difImage.point((redlut + greenlut + bluelut))
 
             self.showImage(difImage, slot=1)
+            self.showImage(sb, slot=2)
 
             now = time.time()
             print  now-self.lastTime, "s/10 iterations"
@@ -505,7 +519,7 @@ def Enhance(image, width, height):
     enh = ImageEnhance.Contrast(img)
     #img = enh.enhance(1.25)
     bt  = ImageEnhance.Brightness(img)
-    img = bt.enhance(0.80)
+    #img = bt.enhance(0.80)
 
     return img.convert("L")
 
@@ -691,15 +705,18 @@ def check_quality(params):
 
     cur_diff = 0
     new_img, np = draw_thread_qual(img, pnt1=p1, pnt2=p2, color=col, width=width)
-    #new_img = draw_thread(img, pnt1=p1, pnt2=p2, color=col, width=width)
+    #new_img, np = draw_thread(img, pnt1=p1, pnt2=p2, color=col, width=width), 1
+
     #cur_diff = image_diff(new_img, trg)    # what is the difference to the target
 
-    if blur > 0.1:
-        blurredImg = ndimage.filters.gaussian_filter(new_img, blur)
-        #cur_diff = image_diff(blurredImg, blurredTarget)    # what is the difference to the target
-        cur_diff += image_diff(blurredImg, blurredTarget)
-    else:
-        cur_diff = image_diff(new_img, trg)    # what is the difference to the target
+    cur_diff = image_diff( sel_blur(new_img, trg), trg)
+
+    #if blur > 0.1:
+    #    blurredImg = ndimage.filters.gaussian_filter(new_img, blur)
+    #    #cur_diff = image_diff(blurredImg, blurredTarget)    # what is the difference to the target
+    #    cur_diff += image_diff(blurredImg, blurredTarget)
+    #else:
+    #    cur_diff = image_diff(new_img, trg)    # what is the difference to the target
 
     #quality = (cur_diff - prevResidual)/(b_len**2)    # how much better did this line make the result
     #quality = (cur_diff - prevResidual)
@@ -728,9 +745,35 @@ def image_diff(imageArray, targetArray):
 
 
 
+def sel_blur(img_np, mask_np):
 
+    num_mipmaps = 5
 
+    img = array_to_PIL_f(img_np)
+    mipmaps = [img_np.copy()]
+    for m in xrange(num_mipmaps):
+        #f = 2**(m+1)
+        f = (2 + m)
+        mm = img.resize( (img.width/f, img.height/f), resample=Image.BICUBIC ).resize( img.size, resample=Image.BICUBIC )
+        mipmaps.append( PIL_to_array(mm) )
 
+    for i,m in enumerate(mipmaps):
+        dst = 1.0 / (num_mipmaps)
+        mm_end   = 1.0 - dst * (i-1)
+        mm_mid   = 1.0 - dst *  i
+        mm_start = 1.0 - dst * (i+1)
+        #msk = numpy.logical_and( trg > mm_start, trg <= mm_end ).astype("float32")
+        weightup = (mask_np - mm_start) / (mm_mid - mm_start)
+        weightdown = 1.0 - (mask_np - mm_mid) / (mm_end - mm_mid)
+        weightup = numpy.clip(weightup, 0, 1, out=weightup)
+        weightdown = numpy.clip(weightdown, 0, 1, out=weightdown)
+        numpy.multiply(m, weightup, out=m)
+        numpy.multiply(m, weightdown, out=m)
+
+        #print i,":",m.shape, mm_start,"-",mm_mid,"-",mm_end
+        #array_to_PIL_rgb(m).show()
+
+    return sum(mipmaps)
 
 
 
@@ -751,17 +794,17 @@ if __name__ == '__main__':
         "nailDistMax": 16.0 / 1000.0 / mpp,     # maximum nail distance
         "nailDiameter": 1.5 / 1000.0 / mpp,       # diameter of the nail for avoidance
         "backgroundColor":0,                      # canvas color
-        "threadColor":(255, 200),                # string color
+        "threadColor":(255, 160),                # string color
         "currentPoint" : 0,
         "lastPoint": -1,
         "start_at": (0.5,0),                     # closest point to start in rel coords [0..1]
-        "inputImagePath": "einstein2.png",
+        "inputImagePath": "einstein3.png",
         "edgesImagePath": "einstein_edges.png",   # optional
         "maxSegmentConnect": 3,             # max number of times two nails can be connected
         "maxConnectsPerNail": 8,            # max connections per nail
         "maxIterations":10000,
         "blurAmount" : 6.0,
-        #"loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t30.json"
+        "loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t36d.json"
     }
 
 
