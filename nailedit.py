@@ -1,5 +1,5 @@
 from PySide import QtGui, QtCore
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageOps
 from PIL import ImageEnhance, ImageChops
 from PIL import ImageQt
 from PointCloud import PointCloud
@@ -98,7 +98,7 @@ class Viewer(QtGui.QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.workImage)
         self.timer.setSingleShot(True)
-        self.timer.start(0)
+        self.timer.start(2000)
 
 
     def save_as(self, filename):
@@ -129,10 +129,16 @@ class Viewer(QtGui.QMainWindow):
         print counts[:100]
 
         self.timer.stop()
-        if self.mode == "Threading" and QtGui.QMessageBox.question(self, "Quit", "Save it?", QtGui.QMessageBox.Yes, QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-            filename = QtGui.QFileDialog.getSaveFileName(self, "Save as", "./", "Nailedit (*.json)")
-            if filename:
-                self.save_as(filename[0])
+
+        if self.mode == "Threading":
+            msg = QtGui.QMessageBox.question(self, "Quit", "Save it?", QtGui.QMessageBox.Yes|QtGui.QMessageBox.No|QtGui.QMessageBox.Cancel)
+            if msg == QtGui.QMessageBox.Yes:
+                filename = QtGui.QFileDialog.getSaveFileName(self, "Save as", "./", "Nailedit (*.json)")
+                if filename:
+                    self.save_as(filename[0])
+            elif msg == QtGui.QMessageBox.Cancel:
+                self.timer.start(10)
+                return event.ignore()
 
 
     def showImage(self, image, slot=0):
@@ -148,10 +154,10 @@ class Viewer(QtGui.QMainWindow):
             self.qim2 = ImageQt.ImageQt(image)   # don't let python clean up the data
             self.imageLabel2.setPixmap(QtGui.QPixmap.fromImage(self.qim2))
             self.imageLabel2.adjustSize()
-        elif slot == 2:
-            self.qim3 = ImageQt.ImageQt(image)   # don't let python clean up the data
-            self.imageLabel3.setPixmap(QtGui.QPixmap.fromImage(self.qim3))
-            self.imageLabel3.adjustSize()
+        #elif slot == 2:
+        #    self.qim3 = ImageQt.ImageQt(image)   # don't let python clean up the data
+        #    self.imageLabel3.setPixmap(QtGui.QPixmap.fromImage(self.qim3))
+        #    self.imageLabel3.adjustSize()
 
 
     def workImage(self):
@@ -220,20 +226,24 @@ class Viewer(QtGui.QMainWindow):
                     js = json.load(f)
                     f.close()
                     pc.addFromList(js["3:nails"])
+                    for p in pc.p:
+                        p.x = max(0, min(img_w - 1, p.x))
+                        p.y = max(0, min(img_h - 1, p.y))
                     self.iterationCounter = 51
                     self.timer.start(10)
                     return
 
 
-            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=0.5)
-            pc.heat(1.0)
-
+            # scatter on mask
             img = array_to_PIL_rgb(self.parameters["EdgesImage"])
-            img = draw_points(img, pc, 3)
-            self.showImage(img, slot=1)
+            scat_start = len(pc.p) - 1
+            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=0.3)
+            for pid in xrange(scat_start, len(pc.p)):
+                pc.p[pid].ignore = True
 
-            numx = int((img_w / maxDist) / numpy.sqrt(2))
-            numy = int(img_h / maxDist)
+            # grid
+            numx = int(img_w / maxDist)
+            numy = int((img_h / maxDist) *  numpy.sqrt(2))
             if numy % 2 == 0: # make sure we have an odd number of lines (to avoid the last line being an offset line)
                 numx += 1
                 numy += 1
@@ -247,12 +257,12 @@ class Viewer(QtGui.QMainWindow):
             for i in xrange(numx):
                 pc.p[gridstart+i].heat = 1.0
                 pc.p[gridstart + i + (numy-1)*numx-((numy-1)/2)].heat = 1.0
+
+            #random points
             pc.addRandom(int(numx * numy * 0.3))
 
-            #pc.maskPoints(targetImage, 0.03)
-
             draw_points(img, pc, 3)
-            self.showImage(img)
+            self.showImage(img, slot=1)
             self.timer.start(5000)
             return
 
@@ -275,10 +285,14 @@ class Viewer(QtGui.QMainWindow):
 
             problems = [0]*len(pnts.p)
             for me,p in enumerate(pnts.p) :
-                if not p.heat > 0:
-                    cps = pnts.closestPoints(p.x, p.y, minDist, me)
-                    if len(cps):
-                        problems[me] = len(cps)
+                cps = pnts.closestPoints(p.x, p.y, minDist, me)
+                if not p.ignore:
+                    if not p.heat: # not the edge
+                        if len(cps):
+                            problems[me] = len(cps)
+                else: # a point from the edge mask can only be deleted if the rim of the grid is close
+                    problems[me] = sum([1 if pnts.p[c].heat else 0 for c in cps])
+
 
             numOffenders = 0
             for me, p in enumerate(pnts.p):
@@ -298,13 +312,19 @@ class Viewer(QtGui.QMainWindow):
 
             else:
                 # last ditch check including all points (even the ones on edges)
+                debug = 0
                 for me,p in enumerate(pnts.p) :
                     cps = pnts.closestPoints(p.x, p.y, minDist, me)
                     cps = [cp for cp in cps if p.dist(pnts.p[cp]) < minDist]
                     if len(cps):
                         numOffenders +=1
+                        if p.ignore:
+                            debug += 1
                 print "point cleanup done. number of minDists:", numOffenders
+                print "ignored offenders", debug
                 print "number of nails", len(pnts.p)
+                if numOffenders > 0:
+                    raise UserWarning
                 self.iterationCounter += 1
 
 
@@ -320,6 +340,7 @@ class Viewer(QtGui.QMainWindow):
             pnts.heat(0)
             for p in pnts.p:
                 p.neighbors = None
+                p.ignore = False
 
             self.disconnect(self.timer, QtCore.SIGNAL("timeout()"), self.workPoints)
             self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.March)
@@ -361,7 +382,7 @@ class Viewer(QtGui.QMainWindow):
 
         # get most reasonable neightbors
         neighbours_idx = pnts.p[current_point_idx].neighbors
-        if neighbours_idx == None:
+        if neighbours_idx is None:
             neighbours_idx = pnts.findNeighbours(current_point_idx, self.parameters["proc_width"]*searchRadius)
             remove_nail_collisions(pnts, current_point_idx, neighbours_idx, self.parameters["nailDiameter"]/2)
             pnts.p[current_point_idx].neighbors = neighbours_idx
@@ -378,15 +399,26 @@ class Viewer(QtGui.QMainWindow):
         #currentImage = numpy.clip(currentImage, 0, max_v, out=currentImage)
 
         params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual, self.blurredTarget, self.currentWidth, blurAmount) for neighbour in neighbours_idx if neighbour != last_point_idx]
-        candidates = self.threadpool.map(check_quality, params)
+        # sort points by distance
+        params.sort(key=lambda x: x[1].dist(x[2]))
+        candidates = []
+        while params:
+            quality = self.threadpool.map(check_quality, params[:5])
+            quality.sort()
+            candidates = quality + candidates
+            if quality[0][0] < 0:    # early exit
+                break
+            params = params[5:]
         #candidates = [check_quality(p) for p in params]
 
         # fish out the best match
         candidates.sort()
 
-        #if not candidates:
-        #    nid = self.find_next_island(currentImage, pnts, current_point_idx, 0)
-        #    candidates.append( check_quality( (currentImage, pnts.p[current_point_idx], pnts.p[nid], self.np_targetArray, nid, col, self.residual, self.blurredTarget, self.currentWidth) ) )
+        jumped = False
+        if not candidates or candidates[0][0] >= 0:
+            nid = self.find_next_island(currentImage, pnts, current_point_idx, 0)
+            candidates.append( check_quality( (currentImage, pnts.p[current_point_idx], pnts.p[nid], self.np_targetArray, nid, col, self.residual, self.blurredTarget, self.currentWidth, blurAmount) ) )
+            jumped = True
 
         #candidates.sort(reverse=True)
         bestMatch = candidates[0]
@@ -435,15 +467,17 @@ class Viewer(QtGui.QMainWindow):
         # Update the UI to reflect that we just did
 
         # pretty render
-        beauty_image = draw_thread_rgb(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (1.0,.2,.1, 1.), width=self.currentWidth)
+        beauty_image = draw_thread_rgb(beauty_image, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (1.0,.2,.1, 1.) if not jumped else (0.,1.,0., 1.), width=self.currentWidth)
         #beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], col[1]), width=self.currentWidth)#(col[0],col[0],col[0]), width=1)
         beauty_image2 = draw_thread_rgb(beauty_image2, pnts.p[current_point_idx], pnts.p[bestMatch[1]], (col[0], col[0], col[0], .5), width=1)
         beauty_image = Image.blend(beauty_image, beauty_image2, 0.1)
-        draw_points(beauty_image, pnts)
+        draw_points(beauty_image, pnts, highlighed=[c[1] for c in candidates])
         self.parameters["BeautyImage"] = beauty_image
         self.parameters["BeautyImage2"] = beauty_image2
-        self.showImage(beauty_image)
-
+        if "img_invert" in self.parameters and self.parameters["img_invert"] > 0:
+            self.showImage(ImageOps.invert(beauty_image))
+        else:
+            self.showImage(beauty_image)
         if self.save_image and self.iterationCounter%4==0:
             beauty_image.save(self.outPath.format(self.imgCounter))
             self.imgCounter += 1
@@ -460,10 +494,11 @@ class Viewer(QtGui.QMainWindow):
             #df = self.blurredTarget - ndimage.filters.gaussian_filter(currentImage, self.currentBlur)
             sb = sel_blur(currentImage,self.np_targetArray)
             df = sb - self.np_targetArray
-            df = df
 
             numpy.multiply(df, 0.5, out=df)
             numpy.add(df, 0.5, out=df)
+            if self.parameters["img_invert"]:
+                df = 1.0 - df
             difImage = array_to_PIL_rgb(df)
             difImage = difImage.point((redlut + greenlut + bluelut))
 
@@ -502,29 +537,54 @@ class Viewer(QtGui.QMainWindow):
 
     def find_next_island(self, currentImg, pnts, current_idx, search_radius):
 
+        cur_diff = sel_blur(currentImg, self.np_targetArray) - self.np_targetArray
+
+        pnt_quality = []
         for idx, p in enumerate(pnts.p):
             if not idx == current_idx:
-                col = getColor(currentImg, p.x, p.y)
-                trg = getColor(self.np_targetArray, p.x, p.y)
-                if col < trg:
-                    return idx
-        return -1
+                quality = getColor(cur_diff, p.x, p.y)
+                if quality < 0:
+                    if pnts.p[idx].neighbors is None or len(pnts.p[idx].neighbors) > 0:
+                        pnt_quality.append((quality / pnts.p[current_idx].dist(p), idx))
+
+        pnt_quality.sort()
+        print pnt_quality
+        return pnt_quality[0][1]
 
 
 
 
-def Enhance(image, width, height):
+def Enhance(image, params):
+
+    width = params["proc_width"]
+    height = params["proc_height"]
+    contrast = params["img_contrast"]
+    brightness = params["img_brightness"]
+    invert = params["img_invert"]
 
     img = image.resize((width, height))
-    enh = ImageEnhance.Contrast(img)
-    #img = enh.enhance(1.25)
-    bt  = ImageEnhance.Brightness(img)
-    #img = bt.enhance(0.80)
+
+    if invert > 0:
+        print numpy.array(img)
+        img = ImageOps.invert(img)
+        print numpy.array(img)
+
+    if contrast != 1.0:
+        enh = ImageEnhance.Contrast(img)
+        img = enh.enhance(contrast)
+
+    if brightness != 1.0:
+        bt  = ImageEnhance.Brightness(img)
+        img = bt.enhance(brightness)
 
     return img.convert("L")
 
 
 def getColor(img, x, y):
+
+    #x = max(0, min(img.shape[1]-1, x))
+    #y = max(0, min(img.shape[0]-1, y))
+
     return img[int(y)][int(x)]
 
 
@@ -617,7 +677,7 @@ def PIL_to_array(pil_image):
     return ret
 
 
-def draw_points(pil_image, pnts, size=1):
+def draw_points(pil_image, pnts, size=1, highlighed=None):
 
     w = int(size-1)/2
     draw = ImageDraw.Draw(pil_image, mode="RGBA")
@@ -638,6 +698,14 @@ def draw_points(pil_image, pnts, size=1):
             else:
                 col = (255, int(255 * (1.0 - p.heat)), 0, 255)
             draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], fill=(col[0], col[1], col[2], 120), outline=col)
+
+    if not highlighed is None:
+        col = (255, 255, 0, 128)
+        w = 2
+        for id in highlighed:
+            p = pnts.p[id]
+            draw.rectangle([p.x-w, p.y-w, p.x+w, p.y+w], outline=col)
+
 
     return pil_image
 
@@ -708,7 +776,6 @@ def check_quality(params):
     #new_img, np = draw_thread(img, pnt1=p1, pnt2=p2, color=col, width=width), 1
 
     #cur_diff = image_diff(new_img, trg)    # what is the difference to the target
-
     cur_diff = image_diff( sel_blur(new_img, trg), trg)
 
     #if blur > 0.1:
@@ -723,7 +790,7 @@ def check_quality(params):
     #quality = (cur_diff - prevResidual) / (b_len)
     #quality = (cur_diff - prevResidual) / length
     quality = (cur_diff - prevResidual) / np
-    quality += abs(quality) * 10 * p2.heat # attenuate by previously visited
+    quality += abs(quality) * 1.5 * p2.heat # attenuate by previously visited
     return (quality, ind, cur_diff, length)
 
 
@@ -787,9 +854,7 @@ if __name__ == '__main__':
         "proc_width":600,       # image size
         "proc_height":600,      #
         "ppi": mpp,             # scale factor to real world, meters per pixel
-        "searchRadius": 0.2,
-        #"grid_resX":25,
-        #"grid_resY":25,
+        "searchRadius": 0.25,
         "nailDistMin": 6 / 1000.0 / mpp,      # minimum nail distance
         "nailDistMax": 16.0 / 1000.0 / mpp,     # maximum nail distance
         "nailDiameter": 1.5 / 1000.0 / mpp,       # diameter of the nail for avoidance
@@ -800,22 +865,29 @@ if __name__ == '__main__':
         "start_at": (0.5,0),                     # closest point to start in rel coords [0..1]
         "inputImagePath": "einstein3.png",
         "edgesImagePath": "einstein_edges.png",   # optional
-        "maxSegmentConnect": 3,             # max number of times two nails can be connected
+        "maxSegmentConnect": 1,             # max number of times two nails can be connected
         "maxConnectsPerNail": 8,            # max connections per nail
         "maxIterations":10000,
         "blurAmount" : 6.0,
-        "loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t36d.json"
+        "img_contrast": 1.0,
+        "img_brightness": 1.0,
+        "img_invert": 0,
+        "loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t37.json"
     }
 
 
+    if len(sys.argv) == 2:
+        with open(sys.argv[1], "r") as f:
+            params = json.load(f)
+            f.close()
 
     # 1 load image
-    img = Image.open(params["inputImagePath"])
+    img = Image.open(params["inputImagePath"]).convert("RGB")
 
     # 1.1 enhance/conform image
     params["proc_width"] = int(params["proc_height"]*float(img.width)/img.height)
     print "input image {:}x{:}, proc dim: {:}x{:}".format(img.width, img.height, params["proc_width"], params["proc_height"])
-    img = Enhance(img, params["proc_width"], params["proc_height"])
+    img = Enhance(img, params)
 
     # 1.2 analyse image
     #   1.3 find edges amd corners

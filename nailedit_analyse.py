@@ -5,7 +5,7 @@ import numpy
 import svgwrite
 #import PointCloud
 from PointCloud import Point2, PointCloud, intersect_line
-from gcode import Mach3 as gc
+from gcode import Mach3 as Gc
 import re
 
 class Viewer(QtGui.QMainWindow):
@@ -71,6 +71,9 @@ class Viewer(QtGui.QMainWindow):
         self.deviation = []
         self.debug_cnt = 1
 
+        self.minNailDist = 2.8 # keep this distance to the nails
+
+
         self.timer = QtCore.QTimer(self)
         self.connect(self.timer, QtCore.SIGNAL("timeout()"), self.debug)
         self.timer.setSingleShot(True)
@@ -91,6 +94,8 @@ class Viewer(QtGui.QMainWindow):
         optionsMenu.addAction(self.showOverlaps)
         self.reversePaths = QtGui.QAction("reverse path", optionsMenu, checkable=True, triggered=self.reverseTriggered)
         optionsMenu.addAction(self.reversePaths)
+        optionsMenu.addAction("check nail distance", self.checkNails)
+        optionsMenu.addAction("calculate COG", self.calculateCOG)
 
 
         #self.layout.addWidget(self.menu)
@@ -124,6 +129,27 @@ class Viewer(QtGui.QMainWindow):
             self.imageLabel3.setPixmap(QtGui.QPixmap.fromImage(self.qim3))
             self.imageLabel3.adjustSize()
 
+
+    def checkNails(self):
+
+        if "Nails" in self.parameters:
+            nails = self.parameters["Nails"]["3:nails"]
+            pc = PointCloud(10,10)
+            print "list", nails
+            pc.addFromList(nails)
+            print pc.p
+            img = self.parameters["image"]
+
+            draw = ImageDraw.Draw(img)
+            min_dist = 1000
+            for i,p in enumerate(pc.p):
+                np, d = pc.closestPoint(p.x, p.y, i)
+                min_dist = min(min_dist, d)
+                if d < self.minNailDist:
+                    draw.rectangle((p.x-3, p.y - 3, p.x + 3, p.y + 3), outline=(255,0,0))
+
+            print "minDist:", min_dist * 1000.0 * self.parameters["Nails"]["2:parameters:"]["ppi"], "mm"
+            self.showImage(img)
 
 
     def openFile(self):
@@ -241,7 +267,6 @@ class Viewer(QtGui.QMainWindow):
         w = js["2:parameters:"]["proc_width"]
         h = js["2:parameters:"]["proc_height"]
         sf = Point2(1,1) * self.scaleFactor * 1000.0 * js["2:parameters:"]["ppi"] # pixels to millimeters
-        minNailDist = 2.8 # keep this distance to the nails
 
         origin = Point2(0,0)
         pc = PointCloud(1,1)
@@ -249,17 +274,84 @@ class Viewer(QtGui.QMainWindow):
         cp = pc.closestPoint(origin.x, origin.y)
         print "origin", nails[cp[0]]
 
-        engine = gc()
-        code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:self.cutoffSlider.value()], minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1/6)*w)
-        #code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:400], minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1)*w)
-        if code:
-            with open(filename, "w") as f:
-                f.write(code)
-                f.close()
-                print "written gcode to", filename
+        engine = Gc(nails, path[:self.cutoffSlider.value()], scaleFactor=sf, origin=pc.p[cp[0]])
+        code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), startPosition=Point2(w*sf.x*.5, -5), minNailDistance=self.minNailDist)
+        #code = engine.generateStringPath(os.path.basename(self.parameters["filename"]), nails, path[:400], self.minNailDist, scaleFactor=sf, origin=Point2(0,0), startPosition=Point2(0.5, -0.1)*w)
+        spl = os.path.splitext(filename)
+        filename = spl[0]+"_string"+spl[1]
+        with open(filename, "w") as f:
+            f.write(code)
+            f.close()
+            print "written gcode to", filename
 
-            img = self.drawGcode(self.parameters["image"], code, Point2(1.0/sf.x,1.0/sf.y), Point2(0,0))
-            self.showImage(img)
+        img = self.drawGcode(self.parameters["image"], code, Point2(1.0/sf.x,1.0/sf.y), Point2(0,0))
+        self.showImage(img)
+
+        code = engine.generateDrillPattern(os.path.basename(self.parameters["filename"]), -6.0)
+        filename = spl[0]+"_drills"+spl[1]
+        with open(filename, "w") as f:
+            f.write(code)
+            f.close()
+            print "written gcode to", filename
+
+
+
+
+
+    def calculateCOG(self):
+        nailWeight = 9.9 / 100 #grams per nail
+        threadWeightPerMeter = 40.0/1000 # g / m
+        canvas_weight = 838 # grams
+
+
+        if "Nails" in self.parameters:
+
+            js = self.parameters["Nails"]
+            w = js["2:parameters:"]["proc_width"]
+            h = js["2:parameters:"]["proc_height"]
+            sf = Point2(1, 1) * self.scaleFactor * 1000.0 * js["2:parameters:"]["ppi"]  # pixels to millimeters
+            origin = Point2(0, 0)
+            pc = PointCloud(1,1)
+            pc.addFromList(js["3:nails"])
+            #cp = pc.closestPoint(origin.x, origin.y)
+            #origin = pc.p[cp[0]]
+            pc.translate(-origin.x, -origin.y)
+            pc.scale(sf.x, sf.y)
+
+            # cog nails
+            nails_cog = Point2(0,0)
+            nails_mass = nailWeight * len(pc.p)
+            for p in pc.p:
+                nails_cog += p
+            nails_cog = nails_cog / len(pc.p)
+
+            # cog thread
+            path = js["4:thread"]
+            cp = pc.p[path[0]]
+            totalThreadLen = 0
+            thread_cog = Point2(0,0)
+            for pid in path[1:]:
+                nxt = pc.p[pid]
+                l = cp.dist(nxt)
+                totalThreadLen += l
+                thread_cog += (cp+nxt)*0.5*l
+                cp = nxt
+            thread_cog /= totalThreadLen
+            thread_mass = totalThreadLen / 1000 * threadWeightPerMeter
+
+            # canvas cog
+            canvas_cog = Point2(float(js["2:parameters:"]["proc_width"])*sf.x, float(js["2:parameters:"]["proc_height"])*sf.y)*0.5
+
+            print "canvas:", canvas_weight, "g"
+            print "nails:", nails_mass, "g"
+            print "thread:", thread_mass, "g"
+            print "canvas cog:", canvas_cog
+            print "nails cog:", nails_cog
+            print "thread cog:", thread_cog
+
+            combined_cog = (canvas_cog*canvas_weight + nails_cog * nails_mass + thread_cog * thread_mass)
+            combined_cog /= canvas_weight + nails_mass + thread_mass
+            print "overall COG", combined_cog
 
 
     def drawGcode(self, img, code, scaleFact, origin):

@@ -7,8 +7,8 @@ from PIL import ImageDraw
 class Point2(object):
 
     def __init__(self, x=0.0, y=0.0, heat=0.0, ignore=False, numConnects=0):
-        self.x = x
-        self.y = y
+        self.x = float(x)
+        self.y = float(y)
         self.heat = heat
         self.ignore = ignore
         self.numConnects = numConnects
@@ -159,6 +159,11 @@ class PointCloud(object):
         pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for y in xrange(int(h)) for x in xrange(int(w if (y%2==0) else (w-1)))]
         self.p += [Point2(p.x*(self.width-1), p.y*(self.height-1)) for p in pt]
 
+    def copy(self):
+        ret = PointCloud(self.width, self.height)
+        ret.p = list(self.p)
+        return ret
+
     def addRandom(self, num):
 
         random.seed(1234)
@@ -168,6 +173,9 @@ class PointCloud(object):
 
         self.p += [Point2(l[0],l[1]) for l in coordList]
 
+    def remove(self, index):
+        if index < len(self.p):
+            del self.p[index]
 
     def translate(self, x, y):
 
@@ -181,6 +189,15 @@ class PointCloud(object):
             pt.x *= sx
             pt.y *= sy
 
+    def bbox(self):
+        bbmin = Point2(1e10, 1e10)
+        bbmax = Point2(-1e10, -1e10)
+        for p in self.p:
+            bbmin.x = min(p.x, bbmin.x)
+            bbmin.y = min(p.y, bbmin.y)
+            bbmax.x = max(p.x, bbmax.x)
+            bbmax.y = max(p.y, bbmax.y)
+        return bbmin, bbmax
 
     def cool(self, f=0.1):
 
@@ -232,7 +249,7 @@ class PointCloud(object):
                     break
             else:
                 fail += 1
-                if fail >= numPoints*10:
+                if fail >= numPoints*20:
                     break
 
         print "successfully scattered", num, "of", numPoints, "points"
@@ -313,10 +330,10 @@ class PointCloud(object):
 
                     if msk[i] <= 0.0 and not self.p[i].ignore:
                         self.p[i] = (self.p[i] - mp) * f + mp
-                        self.p[i] = self.p[i].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
+                        self.p[i] = self.p[i].clamped(0.0, self.width-1, 0.0, self.height-1)
                     if msk[j] <= 0.0 and not self.p[j].ignore:
                         self.p[j] = (self.p[j] - mp) * f + mp
-                        self.p[j] = self.p[j].clamped(0.0, self.width-0.01, 0.0, self.height-0.01)
+                        self.p[j] = self.p[j].clamped(0.0, self.width-1, 0.0, self.height-1)
                     edgedone.add(pair)
 
         #print len(self.p), len(tri.points), np.max(tri.simplices)
@@ -329,7 +346,7 @@ class PointCloud(object):
         #    self.kd = cKDTree(self.npp)
 
         to = Point2(x, y)
-        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if not pnt.ignore and i != thatsNot]
+        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if i != thatsNot]
         dst.sort()
         return dst[0][1], math.sqrt(dst[0][0])
 
@@ -337,7 +354,7 @@ class PointCloud(object):
 
         radius = radius*radius
         to = Point2(x, y)
-        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if not pnt.ignore and i != thatsNot]
+        dst = [(pnt.dist2(to), i) for i,pnt in enumerate(self.p) if  i != thatsNot]
         ret = [d[1] for d in dst if d[0] <= radius]
         return ret
 
