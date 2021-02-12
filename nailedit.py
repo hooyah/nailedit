@@ -117,7 +117,10 @@ class Viewer(QtGui.QMainWindow):
         with open(filename, "w") as f:
             json.dump(data, f, indent=4, sort_keys=True)
             f.close()
-            array_to_PIL_rgb(self.parameters["CurrentImage"]).save(imagename)
+            img = array_to_PIL_rgb(self.parameters["CurrentImage"])
+            if "img_invert" in self.parameters and self.parameters["img_invert"] > 0:
+                img = ImageOps.invert(img)
+            img.save(imagename)
             print "done writing", filename
 
 
@@ -237,7 +240,7 @@ class Viewer(QtGui.QMainWindow):
             # scatter on mask
             img = array_to_PIL_rgb(self.parameters["EdgesImage"])
             scat_start = len(pc.p) - 1
-            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=0.3)
+            pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=self.parameters["edgeThreshold"])
             for pid in xrange(scat_start, len(pc.p)):
                 pc.p[pid].ignore = True
 
@@ -400,7 +403,7 @@ class Viewer(QtGui.QMainWindow):
 
         params = [(currentImage, pnts.p[current_point_idx], pnts.p[neighbour], self.np_targetArray, neighbour, col, self.residual, self.blurredTarget, self.currentWidth, blurAmount) for neighbour in neighbours_idx if neighbour != last_point_idx]
         # sort points by distance
-        params.sort(key=lambda x: x[1].dist(x[2]))
+        """params.sort(key=lambda x: x[1].dist(x[2]))
         candidates = []
         while params:
             quality = self.threadpool.map(check_quality, params[:5])
@@ -408,7 +411,8 @@ class Viewer(QtGui.QMainWindow):
             candidates = quality + candidates
             if quality[0][0] < 0:    # early exit
                 break
-            params = params[5:]
+            params = params[5:]"""
+        candidates = self.threadpool.map(check_quality, params)
         #candidates = [check_quality(p) for p in params]
 
         # fish out the best match
@@ -798,10 +802,10 @@ def image_diff(imageArray, targetArray):
 
     error = numpy.subtract(imageArray, targetArray)
 
-    #better = numpy.clip(error, -2000000000, 0)
-    #worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 4, out=error)
+    better = numpy.clip(error, -2000000000, 0)
+    worse  = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 4, out=error)
     #worse = numpy.multiply(numpy.clip(error, 0, 2000000000, out=error), 2, out=error)
-    #error = numpy.add(better, worse, out=error)
+    error = numpy.add(better, worse, out=error)
 
     #error = numpy.multiply(error, error, out=error) # error**2
     #error = numpy.sqrt(error, out=error)
@@ -865,6 +869,7 @@ if __name__ == '__main__':
         "start_at": (0.5,0),                     # closest point to start in rel coords [0..1]
         "inputImagePath": "einstein3.png",
         "edgesImagePath": "einstein_edges.png",   # optional
+        "edgeThreshold": 0.3,
         "maxSegmentConnect": 1,             # max number of times two nails can be connected
         "maxConnectsPerNail": 8,            # max connections per nail
         "maxIterations":10000,
@@ -878,8 +883,14 @@ if __name__ == '__main__':
 
     if len(sys.argv) == 2:
         with open(sys.argv[1], "r") as f:
-            params = json.load(f)
+            p_in = json.load(f)
             f.close()
+            must_haves = ["currentPoint", "lastPoint", "blurAmount", "edgeThreshold"]
+            for p in must_haves:
+                if not p in p_in:
+                    p_in[p] = params[p]
+            params = p_in
+
 
     # 1 load image
     img = Image.open(params["inputImagePath"]).convert("RGB")
