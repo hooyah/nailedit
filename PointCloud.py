@@ -156,7 +156,7 @@ class PointCloud(object):
         #return [Point2(float(x)/(w-1)+random.uniform(-.5,.5)*(1.0/(w-1)),float(y)/(h-1)+random.uniform(-.5,.5)*(1.0/(h-1))) for x in xrange(w) for y in xrange(h)]
 
         # offset
-        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for y in xrange(int(h)) for x in xrange(int(w if (y%2==0) else (w-1)))]
+        pt = [Point2(float(x) / (w - 1) + ((offset / (w - 1)) if y % 2 else 0), float(y) / (h - 1)) for y in range(int(h)) for x in range(int(w if (y%2==0) else (w-1)))]
         self.p += [Point2(p.x*(self.width-1), p.y*(self.height-1)) for p in pt]
 
     def copy(self):
@@ -167,7 +167,7 @@ class PointCloud(object):
     def addRandom(self, num):
 
         random.seed(1234)
-        self.p += [Point2(random.uniform(0, float(self.width-1)), random.uniform(0,float(self.height-1))) for n in xrange(num)]
+        self.p += [Point2(random.uniform(0, float(self.width-1)), random.uniform(0,float(self.height-1))) for n in range(num)]
 
     def addFromList(self, coordList):
 
@@ -221,7 +221,7 @@ class PointCloud(object):
 
     def scatterOnMask(self, maskImg, numPoints, minDist, threshold = 0.2):
 
-        print 'scattering',numPoints,'points'
+        print ('scattering',numPoints,'points')
         random.seed(4826)
         # brute force
         num = 0
@@ -252,7 +252,7 @@ class PointCloud(object):
                 if fail >= numPoints*20:
                     break
 
-        print "successfully scattered", num, "of", numPoints, "points"
+        print ("successfully scattered", num, "of", numPoints, "points")
 
 
 
@@ -308,7 +308,7 @@ class PointCloud(object):
                     targetLength += self.p[i].dist(self.p[j])
                     numEdges += 1
         targetLength /= numEdges
-        print "targetLen", targetLength, "min", minDist, "max", maxDist
+        print ("targetLen", targetLength, "min", minDist, "max", maxDist)
 
         ease = 0.25 # only move it this much of the desired distance
         edgedone = set()
@@ -366,7 +366,7 @@ class PointCloud(object):
         #ret = range(len(pnts))
         #del ret[pnt]
         r = max_radius**2
-        ret = [i for i in xrange(len(self.p)) if (i != pntInd and not self.p[i].ignore and self.p[pntInd].dist2(self.p[i]) < r)]
+        ret = [i for i in range(len(self.p)) if (i != pntInd and not self.p[i].ignore and self.p[pntInd].dist2(self.p[i]) < r)]
 
         random.seed(73674)
         random.shuffle(ret)
@@ -392,6 +392,6 @@ class PointCloud(object):
         distSqr = (AP**2).sum(-1)[..., np.newaxis]
 
         maxDist = maxDist**2
-        onLine = [(t[i][0]/lenBC, i) for i in xrange(len(A)) if distSqr[i][0] <= maxDist]
+        onLine = [(t[i][0]/lenBC, i) for i in range(len(A)) if distSqr[i][0] <= maxDist]
 
         return onLine

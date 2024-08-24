@@ -1,4 +1,4 @@
-from PySide import QtGui, QtCore
+from PySide6 import QtGui, QtCore , QtWidgets
 from PIL import Image, ImageDraw, ImageOps
 from PIL import ImageEnhance, ImageChops
 from PIL import ImageQt
@@ -20,45 +20,45 @@ def is_jsonable(x):
         return False
 
 
-class Viewer(QtGui.QMainWindow):
+class Viewer(QtWidgets.QMainWindow):
 
     def __init__(self, parameters):
         super(Viewer, self).__init__()
 
         self.parameters = parameters
 
-        self.multiWidget = QtGui.QWidget()
+        self.multiWidget = QtWidgets.QWidget()
 
-        self.imageLabel = QtGui.QLabel(self.multiWidget)
+        self.imageLabel = QtWidgets.QLabel(self.multiWidget)
         self.imageLabel.setBackgroundRole(QtGui.QPalette.Base)
-        self.imageLabel.setSizePolicy(QtGui.QSizePolicy.Minimum,
-                QtGui.QSizePolicy.Minimum)
+        self.imageLabel.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
+                QtWidgets.QSizePolicy.Minimum)
         self.imageLabel.setScaledContents(False)
         self.imageLabel.setStyleSheet("border: 0px")
         self.imageLabel.setContentsMargins(0, 0, 0, 0)
 
-        self.imageLabel2 = QtGui.QLabel(self.multiWidget)
+        self.imageLabel2 = QtWidgets.QLabel(self.multiWidget)
         self.imageLabel2.setBackgroundRole(QtGui.QPalette.Base)
-        self.imageLabel2.setSizePolicy(QtGui.QSizePolicy.Minimum,
-                QtGui.QSizePolicy.Minimum)
+        self.imageLabel2.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
+                QtWidgets.QSizePolicy.Minimum)
         self.imageLabel2.setScaledContents(False)
         self.imageLabel2.setStyleSheet("border: 0px")
         self.imageLabel2.setContentsMargins(0, 0, 0, 0)
 
-        self.imageLabel3 = QtGui.QLabel(self.multiWidget)
+        self.imageLabel3 = QtWidgets.QLabel(self.multiWidget)
         self.imageLabel3.setBackgroundRole(QtGui.QPalette.Base)
-        self.imageLabel3.setSizePolicy(QtGui.QSizePolicy.Minimum,
-                QtGui.QSizePolicy.Minimum)
+        self.imageLabel3.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
+                QtWidgets.QSizePolicy.Minimum)
         self.imageLabel3.setScaledContents(False)
         self.imageLabel3.setStyleSheet("border: 0px")
         self.imageLabel3.setContentsMargins(0, 0, 0, 0)
 
-        self.bl = QtGui.QVBoxLayout(self.multiWidget)
+        self.bl = QtWidgets.QVBoxLayout(self.multiWidget)
         self.bl.addWidget(self.imageLabel)
         self.bl.addWidget(self.imageLabel2)
         self.bl.addWidget(self.imageLabel3)
 
-        self.scrollArea = QtGui.QScrollArea()
+        self.scrollArea = QtWidgets.QScrollArea()
         self.scrollArea.setBackgroundRole(QtGui.QPalette.Dark)
         self.scrollArea.setWidget(self.multiWidget)
         self.setCentralWidget(self.scrollArea)
@@ -121,7 +121,7 @@ class Viewer(QtGui.QMainWindow):
             if "img_invert" in self.parameters and self.parameters["img_invert"] > 0:
                 img = ImageOps.invert(img)
             img.save(imagename)
-            print "done writing", filename
+            print ("done writing", filename)
 
 
 
@@ -129,7 +129,7 @@ class Viewer(QtGui.QMainWindow):
 
         counts = [(c[1], c[0]) for c in self.segmentCount.iteritems()]
         counts.sort(reverse=True)
-        print counts[:100]
+        print (counts[:100])
 
         self.timer.stop()
 
@@ -241,7 +241,7 @@ class Viewer(QtGui.QMainWindow):
             img = array_to_PIL_rgb(self.parameters["EdgesImage"])
             scat_start = len(pc.p) - 1
             pc.scatterOnMask(self.parameters["EdgesImage"], (img_w*img_h)/(minDist**2), minDist, threshold=self.parameters["edgeThreshold"])
-            for pid in xrange(scat_start, len(pc.p)):
+            for pid in range(scat_start, len(pc.p)):
                 pc.p[pid].ignore = True
 
             # grid
@@ -250,14 +250,14 @@ class Viewer(QtGui.QMainWindow):
             if numy % 2 == 0: # make sure we have an odd number of lines (to avoid the last line being an offset line)
                 numx += 1
                 numy += 1
-            print "grid", numx, numy
+            print ("grid", numx, numy)
             gridstart = len(pc.p)
             pc.addGrid(numx, numy)
-            for i in xrange(0, numy, 2):  # mask grid rim
+            for i in range(0, numy, 2):  # mask grid rim
                 linestart = gridstart + i*numx - (i/2)
                 pc.p[linestart].heat = 1.0
                 pc.p[linestart + (numx-1)].heat = 1.0
-            for i in xrange(numx):
+            for i in range(numx):
                 pc.p[gridstart+i].heat = 1.0
                 pc.p[gridstart + i + (numy-1)*numx-((numy-1)/2)].heat = 1.0
 
@@ -323,9 +323,9 @@ class Viewer(QtGui.QMainWindow):
                         numOffenders +=1
                         if p.ignore:
                             debug += 1
-                print "point cleanup done. number of minDists:", numOffenders
-                print "ignored offenders", debug
-                print "number of nails", len(pnts.p)
+                print ("point cleanup done. number of minDists:", numOffenders)
+                print ("ignored offenders", debug)
+                print ("number of nails", len(pnts.p))
                 if numOffenders > 0:
                     raise UserWarning
                 self.iterationCounter += 1
@@ -460,8 +460,8 @@ class Viewer(QtGui.QMainWindow):
         pnts.p[bestMatch[1]].heat = 1.0
 
 
-        print "iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement,
-        print "string {:.1f}m".format(self.string_length), "n",bestMatch[1],"blur:", blurAmount
+        print ("iteration", self.iterationCounter, "residual", bestMatch[2], "improvement", improvement, "avg", self.avg_improvement,)
+        print ("string {:.1f}m".format(self.string_length), "n",bestMatch[1],"blur:", blurAmount)
         #print candidates[:5]
 
 
@@ -488,8 +488,8 @@ class Viewer(QtGui.QMainWindow):
 
         # render a difference image
         if self.iterationCounter % 10 == 0:
-            redlut   = tuple(((127-i)*2) if i <= 127 else 0 for i in xrange(256))
-            greenlut = tuple(0 if i <= 127 else ((i-127)*2) for i in xrange(256))
+            redlut   = tuple(((127-i)*2) if i <= 127 else 0 for i in range(256))
+            greenlut = tuple(0 if i <= 127 else ((i-127)*2) for i in range(256))
             bluelut  = tuple([0]*256)
 
 
@@ -510,7 +510,7 @@ class Viewer(QtGui.QMainWindow):
             self.showImage(sb, slot=2)
 
             now = time.time()
-            print  now-self.lastTime, "s/10 iterations"
+            print  (now-self.lastTime, "s/10 iterations")
             self.lastTime = now
 
         self.iterationCounter += 1
@@ -520,7 +520,7 @@ class Viewer(QtGui.QMainWindow):
 
 
         if abs(self.avg_improvement) <= 0.001:
-            print "no more improvement"
+            print ("no more improvement")
 
             #if self.currentWidth > 1:
             #    self.currentWidth -= 2
@@ -552,7 +552,7 @@ class Viewer(QtGui.QMainWindow):
                         pnt_quality.append((quality / pnts.p[current_idx].dist(p), idx))
 
         pnt_quality.sort()
-        print pnt_quality
+        print (pnt_quality)
         return pnt_quality[0][1]
 
 
@@ -569,9 +569,9 @@ def Enhance(image, params):
     img = image.resize((width, height))
 
     if invert > 0:
-        print numpy.array(img)
+        print (numpy.array(img))
         img = ImageOps.invert(img)
-        print numpy.array(img)
+        print (numpy.array(img))
 
     if contrast != 1.0:
         enh = ImageEnhance.Contrast(img)
@@ -640,7 +640,7 @@ def detect_points_on_line(pc, ind1, ind2, neighbors, maxDist):
     AP = (A - P)
     distSqr = (AP**2).sum(-1)[..., numpy.newaxis]
     onRay = distSqr <= maxDist * maxDist
-    onLine = [(t[i][0], a[i]) for i in xrange(len(a)) if onRay[i][0] and t[i][0] >= 0.0]
+    onLine = [(t[i][0], a[i]) for i in range(len(a)) if onRay[i][0] and t[i][0] >= 0.0]
     onLine.sort()
     #print [(a[i], onRay[i][0], t[i][0], distSqr[i][0]) for i in xrange(len(a))]
     #print onLine
@@ -822,7 +822,7 @@ def sel_blur(img_np, mask_np):
 
     img = array_to_PIL_f(img_np)
     mipmaps = [img_np.copy()]
-    for m in xrange(num_mipmaps):
+    for m in range(num_mipmaps):
         #f = 2**(m+1)
         f = (2 + m)
         mm = img.resize( (img.width/f, img.height/f), resample=Image.BICUBIC ).resize( img.size, resample=Image.BICUBIC )
@@ -851,7 +851,7 @@ def sel_blur(img_np, mask_np):
 if __name__ == '__main__':
     import sys
 
-    app = QtGui.QApplication(sys.argv)
+    app = QtWidgets.QApplication(sys.argv)
 
     mpp = 0.3/600 # meters per pixel
     params = {
@@ -897,7 +897,7 @@ if __name__ == '__main__':
 
     # 1.1 enhance/conform image
     params["proc_width"] = int(params["proc_height"]*float(img.width)/img.height)
-    print "input image {:}x{:}, proc dim: {:}x{:}".format(img.width, img.height, params["proc_width"], params["proc_height"])
+    print ("input image {:}x{:}, proc dim: {:}x{:}".format(img.width, img.height, params["proc_width"], params["proc_height"]))
     img = Enhance(img, params)
 
     # 1.2 analyse image
