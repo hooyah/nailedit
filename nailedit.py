@@ -825,7 +825,7 @@ def sel_blur(img_np, mask_np):
     for m in range(num_mipmaps):
         #f = 2**(m+1)
         f = (2 + m)
-        mm = img.resize( (img.width/f, img.height/f), resample=Image.BICUBIC ).resize( img.size, resample=Image.BICUBIC )
+        mm = img.resize( (img.width//f, img.height//f), resample=Image.BICUBIC ).resize( img.size, resample=Image.BICUBIC )
         mipmaps.append( PIL_to_array(mm) )
 
     for i,m in enumerate(mipmaps):
@@ -877,7 +877,7 @@ if __name__ == '__main__':
         "img_contrast": 1.0,
         "img_brightness": 1.0,
         "img_invert": 0,
-        "loadNailsFrom": "Q:\\Projects\\code\\nailedit\\t37.json"
+        "loadNailsFrom": "/home/nmavor/PycharmProjects/nailedit/t37.json"
     }
 
 
