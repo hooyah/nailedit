@@ -8,7 +8,7 @@ I just put it out here because people keep asking me about it and it may be help
 to some to have a peek at it.
 
 ##### Requirements
-* Python 2.7
+* Python 3
 * pyQt
 * Pyside
 * PIL
